@@ -5,11 +5,11 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /source
 
 # Copy the project file and restore dependencies
-COPY *.csproj .
+COPY Cryptopia.Node/*.csproj .
 RUN dotnet restore
 
 # Copy the rest of the source code and build the application
-COPY . .
+COPY Cryptopia.Node/. .
 RUN dotnet publish -c Release -o /app
 
 # Use the official .NET runtime image for the final stage
