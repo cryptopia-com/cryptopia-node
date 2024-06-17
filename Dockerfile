@@ -24,5 +24,8 @@ RUN apt-get update && apt-get install -y iputils-ping
 # Copy the built application from the build stage
 COPY --from=build /app .
 
+# Expose ports
+EXPOSE 8000 3478 5349 3033 59000-65000
+
 # Define the entry point for the container
 ENTRYPOINT ["dotnet", "Cryptopia.Node.dll"]

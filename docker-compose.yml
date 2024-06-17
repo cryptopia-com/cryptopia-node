@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  cryptopia-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"        # WebSocket server
+      - "3478:3478/udp"    # STUN/TURN UDP traffic
+      - "3478:3478/tcp"    # STUN/TURN TCP traffic
+      - "5349:5349/tcp"    # TURN over TLS
+      - "3033:3033"        # ICE server
+      - "59000-65000:59000-65000/udp"  # TURN/STUN server for WebRTC
+    environment:
+      - PUBLIC_IP=0.0.0.0
