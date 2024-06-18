@@ -372,7 +372,7 @@ namespace Cryptopia.Node.RTC
             // Check if ping
             if (message.Equals("ping", StringComparison.InvariantCultureIgnoreCase))
             {
-                Send("pong");
+                Send("pong 2");
             }
 
             // Echo message
