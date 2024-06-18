@@ -57,5 +57,4 @@ This guide provides instructions to deploy the Cryptopia Node on an Ubuntu serve
 ## Notes
 
 - Ensure all the necessary ports are open on your server to allow proper communication.
-- Monitor the logs for any issues or errors and troubleshoot accordingly.
 - This setup is intended for testing and experimental purposes only.
