@@ -9,8 +9,11 @@
         Connecting,
         Signalling,
         Rejected,
+        Failed,
         Open,
+        Closing,
         Closed,
-        Failed
+        Disposing,
+        Disposed
     }
 }

@@ -6,11 +6,6 @@
     public class AccountChannel : BaseChannel, IAccountChannel
     {
         /// <summary>
-        /// The label for the channel
-        /// </summary>
-        public static string CHANNEL_LABEL = "ACCOUNT_DATA_CHANNEL";
-
-        /// <summary>
         /// The node account (us)
         /// </summary>
         public LocalAccount OriginSigner { get; private set; }
@@ -46,11 +41,6 @@
             OriginSigner = originSigner;
             DestinationSigner = destinationSigner;
             DestinationAccount = destinationAccount;
-        }
-
-        public override string GetLabel()
-        { 
-            return CHANNEL_LABEL;
         }
 
         protected override void SendAnswer(SDPInfo answer)

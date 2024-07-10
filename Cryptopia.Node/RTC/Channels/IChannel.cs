@@ -3,8 +3,13 @@
     /// <summary>
     /// Represents a communication channel in the mesh network
     /// </summary>
-    public interface IChannel
+    public interface IChannel : IDisposable
     {
+        /// <summary>
+        /// Returns true if the channel is stable
+        /// </summary>
+        bool IsStable { get; }
+
         /// <summary>
         /// Gets the current state of the channel
         /// </summary>
@@ -31,6 +36,11 @@
         event EventHandler<ChannelState> OnStateChange;
 
         /// <summary>
+        /// Occurs when the channel is disposed
+        /// </summary>
+        public event EventHandler OnDispose;
+
+        /// <summary>
         /// Opens the channel
         /// </summary>
         /// <returns>Task that represents the asynchronous operation</returns>
@@ -46,19 +56,20 @@
         /// <summary>
         /// Rejects an SDP offer
         /// </summary>
+        /// <param name="offer">The SDP offer to reject</param>
         /// <returns>Task that represents the asynchronous operation</returns>
-        Task RejectAsync();
+        Task RejectAsync(SDPInfo offer);
 
         /// <summary>
         /// Closes the channel
         /// </summary>
-        void Close();
+        /// <returns>Task that represents the asynchronous operation</returns>
+        Task CloseAsync();
 
         /// <summary>
         /// Sends a message over the channel
         /// </summary>
         /// <param name="message">The message to send</param>
-        /// <returns>Task that represents the asynchronous operation</returns>
         void Send(string message);
     }
 }

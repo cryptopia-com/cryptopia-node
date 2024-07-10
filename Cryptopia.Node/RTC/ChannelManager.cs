@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace Cryptopia.Node.RTC
 {
@@ -85,6 +86,9 @@ namespace Cryptopia.Node.RTC
                 new LocalAccount(signer),
                 new RegisteredAccount(account, "Unknown"));
 
+            // Subscribe to the OnDisposed event
+            channel.OnDispose += (sender, args) => RemoveChannel(account, signer);
+
             // Store in memory
             if (!_Channels.ContainsKey(account))
             {
@@ -92,8 +96,24 @@ namespace Cryptopia.Node.RTC
             }
 
             _Channels[account][signer] = channel;
-
             return channel;
+        }
+
+        /// <summary>
+        /// Removes the channel from the dictionary
+        /// </summary>
+        /// <param name="account"></param>
+        /// <param name="signer"></param>
+        private void RemoveChannel(string account, string signer)
+        {
+            if (_Channels.TryGetValue(account, out var accountChannels))
+            {
+                accountChannels.TryRemove(signer, out _);
+                if (accountChannels.IsEmpty)
+                {
+                    _Channels.TryRemove(account, out _);
+                }
+            }
         }
     }
 }

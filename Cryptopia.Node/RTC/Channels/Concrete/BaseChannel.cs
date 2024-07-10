@@ -8,28 +8,66 @@ namespace Cryptopia.Node.RTC
     public abstract class BaseChannel : IChannel
     {
         /// <summary>
+        /// Returns true if the channel is stable
+        /// </summary>
+        public bool IsStable
+        {
+            get
+            {
+                lock (_Lock)
+                {
+                    return _IsStable;
+                }
+            }
+            private set
+            {
+                var shouldNotify = false;
+                lock (_Lock)
+                {
+                    SetStable(value,
+                        out shouldNotify);
+                }
+
+                if (shouldNotify)
+                {
+                    OnStable();
+                }
+            }
+        }
+        private bool _IsStable = false;
+
+        /// <summary>
         /// Gets the current state of the channel
         /// </summary>
         public ChannelState State
         {
             get
             {
-                return _State;
+                lock (_Lock)
+                {
+                    return _State;
+                }
             }
             protected set
             {
-                if (_State != value)
+                bool shouldNotifyChane, shouldNotifyOpen;
+                lock (_Lock)
                 {
-                    _State = value;
+                    SetState(value,
+                        out shouldNotifyChane,
+                        out shouldNotifyOpen);
+                }
 
-                    // Notify change
+                // Notify change
+                if (shouldNotifyChane)
+                {
                     OnStateChange?.Invoke(this, value);
+                }
 
-                    // Notify open
-                    if (value == ChannelState.Open)
-                    {
-                        OnOpen?.Invoke(this, new EventArgs());
-                    }
+                // Notify open
+                if (shouldNotifyOpen)
+                {
+                    OnOpen?.Invoke(this, new EventArgs());
                 }
             }
         }
@@ -45,23 +83,24 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         public bool IsInitiatedByUs { get; private set; }
 
-        /// <summary>
-        /// Occurs when the channel is opened
-        /// </summary>
-        public event EventHandler? OnOpen;
-
-        /// <summary>
-        /// Occurs when the state of the channel changes
-        /// </summary>
-        public event EventHandler<ChannelState>? OnStateChange;
-
         // Services
         protected ILoggingService LoggingService { get; private set; }
         protected ISignallingService SignallingService { get; private set; }
 
         // Internal
+        private readonly object _Lock = new object();
         private RTCDataChannel? _DataChannel;
-        private RTCPeerConnection _PeerConnection;
+        private RTCDataChannel? _CommandChannel;
+        private RTCPeerConnection? _PeerConnection;
+
+        // Constants
+        private const string DATA_CHANNEL_LABEL = "data";
+        private const string COMMAND_CHANNEL_LABEL = "command";
+
+        // Events
+        public event EventHandler? OnOpen;
+        public event EventHandler<ChannelState>? OnStateChange;
+        public event EventHandler? OnDispose;
 
         /// <summary>
         /// Constructor
@@ -92,28 +131,64 @@ namespace Cryptopia.Node.RTC
             _PeerConnection = new RTCPeerConnection(peerConfig);
             _PeerConnection.onicecandidate += OnOnIceCandidate;
             _PeerConnection.oniceconnectionstatechange += OnIceConnectionChange;
-            _PeerConnection.ondatachannel += (dataChannel) =>
+            _PeerConnection.ondatachannel += (channel) =>
             {
-                if (null != _DataChannel)
+                if (channel == null || string.IsNullOrEmpty(channel.label))
                 {
-                    LoggingService.LogError("Data channel already set");
+                    loggingService.LogError("Received a data channel with no label");
                     return;
                 }
 
-                _DataChannel = dataChannel;
-                _DataChannel.onopen += OnDataChannelOpen;
-                _DataChannel.onmessage += OnDataChannelMessage;
-                _DataChannel.onclose += OnDataChannelClose;
-                _DataChannel.onerror += OnDataChannelError;
-
-                if (_DataChannel.readyState == RTCDataChannelState.open)
+                switch (channel.label)
                 {
-                    CheckConnectionStable();
+                    case DATA_CHANNEL_LABEL:
+                        SetDataChannel(channel);
+                        break;
+
+                    case COMMAND_CHANNEL_LABEL:
+                        SetCommandChannel(channel);
+                        break;
+
+                    default:
+                        loggingService.LogError($"Received an unknown channel: {channel.label}");
+                        break;
                 }
             };
         }
 
-        #region "Public Methods"
+        #region "Methods"
+
+        /// <summary>
+        /// Connects to the signalling server
+        /// </summary>
+        /// <returns></returns>
+        private async Task ConnectAsync()
+        {
+            // Indicate connecting started
+            LoggingService.LogInfo("Connecting");
+            State = ChannelState.Connecting;
+
+            // Connect to signalling server
+            if (!SignallingService.IsOpen)
+            {
+                SignallingService.Connect();
+
+                // Set the timeout duration (in seconds)
+                var timeout = DateTime.Now + TimeSpan.FromSeconds(10); // TODO: From config
+                while (!SignallingService.IsOpen && DateTime.Now < timeout)
+                {
+                    await Task.Delay(100);
+                }
+
+                if (!SignallingService.IsOpen)
+                {
+                    State = ChannelState.Failed;
+                    var exception = new InvalidOperationException("Connection timeout");
+                    LoggingService.LogError(exception.Message);
+                    throw exception;
+                }
+            }
+        }
 
         /// <summary>s
         /// Opens the channel
@@ -145,10 +220,30 @@ namespace Cryptopia.Node.RTC
                 throw exception;
             }
 
+            // Connect to signalling server
             await ConnectAsync();
 
             // Indicate signalling started
-            State = ChannelState.Signalling;
+            bool shouldNotifyChange;
+            lock (_Lock)
+            {
+                if (_State != ChannelState.Connecting)
+                {
+                    LoggingService.LogWarning($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                    return;
+                }
+
+                SetState(
+                    ChannelState.Signalling,
+                    out shouldNotifyChange,
+                    out bool shouldNotifyOpen);
+            }
+
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnStateChange?.Invoke(this, ChannelState.Signalling);
+            }
 
             // Accept offer
             LoggingService.LogInfo("Accepting offer");
@@ -158,10 +253,25 @@ namespace Cryptopia.Node.RTC
                 type = Enum.Parse<RTCSdpType>(offer.Type.ToLower())
             };
 
+            // Assert peer connection
+            if (null == _PeerConnection)
+            {
+                throw new InvalidOperationException("Peer connection not initialized");
+            }
+
             _PeerConnection.setRemoteDescription(remoteSessionDescription);
 
+            // Create answer
             var answer = _PeerConnection.createAnswer();
             await _PeerConnection.setLocalDescription(answer);
+
+            // Something went wrong?
+            if (State != ChannelState.Signalling)
+            {
+                // TODO: Revert?
+                LoggingService.LogWarning("Something went wrong while creating an answer");
+                return;
+            }
 
             // Send answer
             SendAnswer(new SDPInfo
@@ -174,8 +284,9 @@ namespace Cryptopia.Node.RTC
         /// <summary>
         /// Rejects an SDP offer
         /// </summary>
+        /// <param name="offer">The SDP offer to reject</param>
         /// <returns>Task that represents the asynchronous operation</returns>
-        public Task RejectAsync()
+        public Task RejectAsync(SDPInfo offer)
         {
             throw new NotImplementedException();
         }
@@ -183,74 +294,260 @@ namespace Cryptopia.Node.RTC
         /// <summary>
         /// Closes the channel
         /// </summary>
-        public void Close()
-        {
-            if (State != ChannelState.Open || null == _DataChannel)
-            {
-                LoggingService.LogWarning("Channel is not open");
-                return;
-            }
-
-            // Send close command
-            _DataChannel.send("close");
-
-            // Close data channel
-            _DataChannel.close();
-            _DataChannel = null;
-
-            // Mark closed
-            State = ChannelState.Closed;
-
-            // Log
-            LoggingService.LogInfo("Connection is closed");
+        public Task CloseAsync()
+        { 
+            return CloseAsync(true);
         }
 
         /// <summary>
-        /// Sends a message over the channel
+        /// Closes the channel and notifies the other party if requested
+        /// 
+        /// TODO: Return result or throw
+        /// </summary>
+        private async Task CloseAsync(bool notify)
+        {
+            bool shouldNotifyChange;
+            lock (_Lock)
+            {
+                if (_State != ChannelState.Open)
+                {
+                    LoggingService.LogWarning("Channel is not open");
+                    return;
+                }
+
+                SetState(
+                    ChannelState.Closing,
+                    out shouldNotifyChange,
+                    out bool shouldNotifyOpen);
+            }
+
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnStateChange?.Invoke(this, ChannelState.Closing);
+            }
+
+            try
+            {
+                RTCDataChannel? commandChannel;
+                RTCDataChannel? dataChannel;
+
+                lock (_Lock)
+                {
+                    commandChannel = _CommandChannel;
+                    dataChannel = _DataChannel;
+                }
+
+                // Send close command 
+                if (notify && commandChannel != null && commandChannel.readyState == RTCDataChannelState.open)
+                {
+                    commandChannel.send(ChannelCommand.Close.ToString());
+
+                    // Wait for the buffered amount to be zero or a short timeout
+                    const int maxWaitTime = 500; // Maximum wait time in milliseconds
+                    const int checkInterval = 50; // Check every 50ms
+                    int elapsedTime = 0;
+
+                    while (commandChannel.bufferedAmount > 0 && elapsedTime < maxWaitTime)
+                    {
+                        await Task.Delay(checkInterval); // TODO: From settings
+                        elapsedTime += checkInterval;
+                    }
+                }
+
+                // Close data channel
+                if (dataChannel != null)
+                {
+                    dataChannel.close();
+                }
+            }
+            finally
+            {
+                lock (_Lock)
+                {
+                    // Free unmanaged resources
+                    _DataChannel = null;
+                }
+
+                // Mark closed
+                State = ChannelState.Closed;
+
+                // Log
+                LoggingService.LogInfo("Channel is closed");
+            }
+        }
+
+        /// <summary>
+        /// Sends a message over the data channel
         /// </summary>
         /// <param name="message">The message to send</param>
-        /// <returns>Task that represents the asynchronous operation</returns>
-        public void Send(string message)
+        public virtual void Send(string message)
         {
             if (State != ChannelState.Open || null == _DataChannel)
             {
                 throw new Exception("Channel not open");
             }
 
+            // Transmit over data channel
             _DataChannel.send(message);
+
+            // Log message
             LoggingService.Log($">: {message}");
         }
-        #endregion
-        #region "Internal Methods"
 
-        private async Task ConnectAsync()
+        /// <summary>
+        /// Check if the connection is stable
+        /// </summary>
+        /// <returns></returns>
+        private bool CheckStable()
         {
-            // Indicate connecting started
-            LoggingService.LogInfo("Connecting");
-            State = ChannelState.Connecting;
-
-            // Connect to signalling server
-            if (!SignallingService.IsOpen)
+            if (null == _CommandChannel)
             {
-                SignallingService.Connect();
+                IsStable = false;
+                return false;
+            }
 
-                // Set the timeout duration (in seconds)
-                var timeout = DateTime.Now + TimeSpan.FromSeconds(10);
-                while (!SignallingService.IsOpen && DateTime.Now < timeout)
+            else if (_CommandChannel.readyState != RTCDataChannelState.open)
+            {
+                IsStable = false;
+                return false;
+            }
+
+            if (null == _PeerConnection || _PeerConnection.iceConnectionState != RTCIceConnectionState.connected)
+            {
+                IsStable = false;
+                return false;
+            }
+
+            IsStable = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Modifies the stable value of the channel (should be called within a lock)
+        /// </summary>
+        /// <param name="value"></param>
+        /// <param name="shouldNotifyChange"></param>
+        private void SetStable(bool value, out bool shouldNotifyChange)
+        {
+            shouldNotifyChange = false;
+
+            // Unchanged
+            if (_IsStable == value)
+            {
+                return;
+            }
+
+            _IsStable = value;
+
+            // Notify outside the lock
+            shouldNotifyChange = value;
+        }
+
+        /// <summary>
+        /// Modifies the state of the channel (should be called within a lock)
+        /// </summary>
+        /// <param name="value"></param>
+        /// <param name="shouldNotifyChange"></param>
+        /// <param name="shouldNotifyOpen"></param>
+        private void SetState(ChannelState value, out bool shouldNotifyChange, out bool shouldNotifyOpen)
+        {
+            shouldNotifyChange = false;
+            shouldNotifyOpen = false;
+
+            // Unchanged
+            if (_State == value)
+            {
+                return;
+            }
+
+            _State = value;
+
+            // Notify outside the lock
+            shouldNotifyChange = true;
+            if (value == ChannelState.Open)
+            {
+                shouldNotifyOpen = true;
+            }
+        }
+
+        /// <summary>
+        /// Sets the data channel
+        /// </summary>
+        /// <param name="channel"></param>
+        private void SetDataChannel(RTCDataChannel channel)
+        {
+            if (null != _DataChannel)
+            {
+                LoggingService.LogError("Data channel already set");
+                return;
+            }
+
+            _DataChannel = channel;
+            _DataChannel.onopen += OnDataChannelOpen;
+            _DataChannel.onclose += OnDataChannelClose;
+            _DataChannel.onerror += OnDataChannelError;
+            _DataChannel.onmessage += OnDataChannelMessage;
+
+            // Is stable and open?
+            if (CheckStable() && _DataChannel.readyState == RTCDataChannelState.open)
+            {
+                bool shouldNotifyChange, shouldNotifyOpen;
+                lock (_Lock)
                 {
-                    await Task.Delay(100);
+                    if (_State == ChannelState.Closing ||
+                        _State == ChannelState.Disposing ||
+                        _State == ChannelState.Disposed)
+                    {
+                        return;
+                    }
+
+                    SetState(
+                        ChannelState.Open,
+                        out shouldNotifyChange,
+                        out shouldNotifyOpen);
                 }
 
-                if (!SignallingService.IsOpen)
+                // Notify change
+                if (shouldNotifyChange)
                 {
-                    State = ChannelState.Failed;
-                    var exception = new InvalidOperationException("Connection timeout");
-                    LoggingService.LogError(exception.Message);
-                    throw exception;
+                    OnStateChange?.Invoke(this, ChannelState.Open);
+                }
+
+                // Notify open
+                if (shouldNotifyOpen)
+                {
+                    OnOpen?.Invoke(this, new EventArgs());
                 }
             }
         }
 
+        /// <summary>
+        /// Sets the command channel
+        /// </summary>
+        /// <param name="channel"></param>
+        private void SetCommandChannel(RTCDataChannel channel)
+        {
+            if (null != _CommandChannel)
+            {
+                LoggingService.LogError("Command channel already set");
+                return;
+            }
+
+            _CommandChannel = channel;
+            _CommandChannel.onopen += OnCommandChannelOpen;
+            _CommandChannel.onclose += OnCommandChannelClose;
+            _CommandChannel.onerror += OnCommandChannelError;
+            _CommandChannel.onmessage += OnCommandChannelMessage;
+
+            // Is stable?
+            CheckStable();
+        }
+
+        /// <summary>
+        /// Adds an ICE candidate to the channel
+        /// </summary>
+        /// <param name="candidate"></param>
         protected void AddIceCandidate(IceCandidate candidate)
         {
             if (null == _PeerConnection)
@@ -280,28 +577,127 @@ namespace Cryptopia.Node.RTC
             _PeerConnection.addIceCandidate(iceCandidate);
         }
 
-        private void CheckConnectionStable()
+        /// <summary>
+        /// Disposes the channel
+        /// </summary>
+        public void Dispose()
         {
-            if (null == _DataChannel)
+            Dispose(true).GetAwaiter().GetResult();
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Disposes the channel
+        /// </summary>
+        /// <param name="shouldDispose"></param>
+        /// <returns></returns>
+        protected virtual async Task Dispose(bool shouldDispose)
+        {
+            bool shouldNotifyChange;
+            lock (_Lock)
             {
-                return;
+                if (_State == ChannelState.Disposing ||
+                    _State == ChannelState.Disposed)
+                {
+                    return;
+                }
+
+                SetState(
+                    ChannelState.Disposing,
+                    out shouldNotifyChange,
+                    out bool shouldNotifyOpen);
             }
 
-            if (_DataChannel.readyState != RTCDataChannelState.open)
+            // Notify change
+            if (shouldNotifyChange)
             {
-                return;
+                OnStateChange?.Invoke(this, ChannelState.Disposing);
             }
 
-            if (_PeerConnection.iceConnectionState != RTCIceConnectionState.connected)
+            try
             {
-                return;
-            }
+                if (shouldDispose)
+                {
+                    // Dispose managed resources
+                    RTCDataChannel? commandChannel;
+                    RTCDataChannel? dataChannel;
+                    RTCPeerConnection? peerConnection;
 
-            OnConnectionStable();
+                    lock (_Lock)
+                    {
+                        commandChannel = _CommandChannel;
+                        dataChannel = _DataChannel;
+                        peerConnection = _PeerConnection;
+                    }
+
+                    if (commandChannel != null)
+                    {
+                        if (commandChannel.readyState == RTCDataChannelState.open)
+                        {
+                            // Send dispose command
+                            commandChannel.send(ChannelCommand.Dispose.ToString());
+
+                            // Wait for the buffered amount to be zero or a short timeout
+                            const int maxWaitTime = 500; // Maximum wait time in milliseconds
+                            const int checkInterval = 50; // Check every 50ms
+                            int elapsedTime = 0;
+
+                            while (commandChannel.bufferedAmount > 0 && elapsedTime < maxWaitTime)
+                            {
+                                await Task.Delay(checkInterval);
+                                elapsedTime += checkInterval;
+                            }
+                        }
+
+                        commandChannel.close();
+                    }
+
+                    // Close data channel
+                    if (dataChannel != null)
+                    {
+                        dataChannel.close();
+                    }
+
+                    // Close and dispose peer connection
+                    if (peerConnection != null)
+                    {
+                        peerConnection.close();
+                        peerConnection.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                lock (_Lock)
+                {
+                    // Free unmanaged resources
+                    _DataChannel = null;
+                    _CommandChannel = null;
+                    _PeerConnection = null;
+                }
+
+                // Mark disposed
+                State = ChannelState.Disposed;
+
+                // Notify
+                OnDispose?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Destructor to catch cases where Dispose was not called
+        /// </summary>
+        ~BaseChannel()
+        {
+            Dispose(false).GetAwaiter().GetResult();
         }
         #endregion
         #region "Event Handlers"
 
+        /// <summary>
+        /// Called when a new ICE candidate is available
+        /// </summary>
+        /// <param name="candidate"></param>
         protected virtual void OnOnIceCandidate(RTCIceCandidate candidate)
         {
             if (candidate == null || string.IsNullOrEmpty(candidate.candidate))
@@ -321,6 +717,10 @@ namespace Cryptopia.Node.RTC
             });
         }
 
+        /// <summary>
+        /// Called when the ICE connection state changes
+        /// </summary>
+        /// <param name="state"></param>
         protected virtual void OnIceConnectionChange(RTCIceConnectionState state)
         {
             if (state != RTCIceConnectionState.connected)
@@ -328,10 +728,13 @@ namespace Cryptopia.Node.RTC
                 return;
             }
 
-            CheckConnectionStable();
+            CheckStable();
         }
 
-        protected virtual void OnConnectionStable()
+        /// <summary>
+        /// Called when the connection is stable
+        /// </summary>
+        protected virtual void OnStable()
         {
             if (State == ChannelState.Open)
             {
@@ -348,22 +751,97 @@ namespace Cryptopia.Node.RTC
             }
         }
 
+        /// <summary>
+        /// Called when the command channel is open
+        /// </summary>
+        protected virtual void OnCommandChannelOpen()
+        {
+            LoggingService.LogInfo("Command channel opened");
+            CheckStable();
+        }
+
+        /// <summary>
+        /// Called when the command channel is closed
+        /// </summary>
+        protected virtual void OnCommandChannelClose()
+        {
+            LoggingService.LogInfo("Command channel closed"); 
+        }
+
+        /// <summary>
+        /// Called when an error occurs on the command channel
+        /// </summary>
+        /// <param name="error"></param>
+        protected virtual void OnCommandChannelError(string error)
+        {
+            LoggingService.LogError(error);
+            State = ChannelState.Failed;
+        }
+
+        /// <summary>
+        /// Called when a message is received on the command channel
+        /// </summary>
+        /// <param name="dc"></param>
+        /// <param name="protocol"></param>
+        /// <param name="bytes"></param>
+        protected virtual void OnCommandChannelMessage(RTCDataChannel dc, DataChannelPayloadProtocols protocol, byte[] bytes)
+        {
+            var message = System.Text.Encoding.UTF8.GetString(bytes);
+            if (!message.TryParseEnum<ChannelCommand>(out var command))
+            {
+                LoggingService.LogWarning($"Received unknown command: {message}");
+                return;
+            }
+
+            // Log command
+            LoggingService.Log($"/{command}");
+
+            // Execute command
+            switch (command)
+            {
+                case ChannelCommand.Close:
+                    Task.Run(() => CloseAsync(false));
+                    break;
+
+                case ChannelCommand.Dispose:
+                    Dispose();
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Called when the data channel is open
+        /// </summary>
         protected virtual void OnDataChannelOpen()
         {
-            CheckConnectionStable();
+            LoggingService.LogInfo("Data channel opened");
+            CheckStable();
         }
 
+        /// <summary>
+        /// Called when the data channel is closed
+        /// </summary>
         protected virtual void OnDataChannelClose()
         {
-            LoggingService.LogInfo("OnDataChannelClose");
+            LoggingService.LogInfo("Data channel closed");
         }
 
+        /// <summary>
+        /// Called when an error occurs on the data channel
+        /// </summary>
+        /// <param name="error"></param>
         protected virtual void OnDataChannelError(string error)
         {
             LoggingService.LogError(error);
             State = ChannelState.Failed;
         }
 
+        /// <summary>
+        /// Called when a message is received on the data channel
+        /// </summary>
+        /// <param name="dc"></param>
+        /// <param name="protocol"></param>
+        /// <param name="bytes"></param>
         protected virtual void OnDataChannelMessage(RTCDataChannel dc, DataChannelPayloadProtocols protocol, byte[] bytes)
         {
             var message = System.Text.Encoding.UTF8.GetString(bytes);
@@ -380,18 +858,10 @@ namespace Cryptopia.Node.RTC
             { 
                 Send(message.Substring("echo:".Length).TrimStart());
             }
-
-            // Close message
-            else if (message.Equals("close", StringComparison.InvariantCultureIgnoreCase))
-            {
-                Close();
-            }
         }
 
         #endregion
         #region "Abstract methods"
-
-        public abstract string GetLabel();
 
         protected abstract void SendAnswer(SDPInfo answer);
 
