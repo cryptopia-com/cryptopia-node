@@ -92,9 +92,12 @@ namespace Cryptopia.Node.RTC
                 case RTCMessageType.Candidate:
                     payload = payloadToken.ToObject<RTCCandidateMessage>();
                     break;
-                case RTCMessageType.Text:
-                    payload = payloadToken.ToObject<RTCTextMessage>();
-                    break;   
+                case RTCMessageType.Broadcast:
+                    payload = payloadToken.ToObject<RTCBroadcastMessage>();
+                    break;
+                case RTCMessageType.Relay:
+                    payload = payloadToken.ToObject<RTCRelayMessage>();
+                    break;
             }
 
             if (null == payload)
@@ -113,6 +116,29 @@ namespace Cryptopia.Node.RTC
                 Receiver = envelopeToken["receiver"].ToObject<RTCReceiver>(),
                 Payload = payload
             };
+        }
+
+        /// <summary>
+        /// Custom deserialization for RTCMessageEnvelope that handles polymorphic RTCMessage types
+        /// </summary>
+        /// <param name="json"></param>
+        /// <param name="envelope"></param>
+        /// <returns>
+        /// True if the deserialization was successful
+        /// </returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        public static bool TryDeserializeRTCMessage(this string json, out RTCMessageEnvelope? envelope)
+        {
+            try 
+            {
+                envelope = json.DeserializeRTCMessage();
+                return true;
+            }
+            catch (Exception)
+            {
+                envelope = default;
+                return false;
+            }
         }
     }
 }

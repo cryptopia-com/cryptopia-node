@@ -1,10 +1,9 @@
 ﻿using System.Collections.Concurrent;
-using System.Diagnostics;
 
 namespace Cryptopia.Node.RTC
 {
     /// <summary>
-    /// 
+    /// Manages the channels to the node
     /// </summary>
     public class ChannelManager : Singleton<ChannelManager>
     {
@@ -65,7 +64,7 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         /// <param name="account">Registered smart-contract address</param>
         /// <param name="signer">Signer</param></param>
-        /// <retu
+        /// <returns></returns>
         public IAccountChannel CreateChannel(string account, string signer, ISignallingService signalling)
         {
             var channel = new AccountChannel(
@@ -86,7 +85,8 @@ namespace Cryptopia.Node.RTC
                 new LocalAccount(signer),
                 new RegisteredAccount(account, "Unknown"));
 
-            // Subscribe to the OnDisposed event
+            // Subscribe  to events
+            channel.OnMessage += OnChannelMessage;
             channel.OnDispose += (sender, args) => RemoveChannel(account, signer);
 
             // Store in memory
@@ -112,6 +112,61 @@ namespace Cryptopia.Node.RTC
                 if (accountChannels.IsEmpty)
                 {
                     _Channels.TryRemove(account, out _);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles the channel message
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="envelope"></param>
+        private void OnChannelMessage(object? sender, RTCMessageEnvelope envelope)
+        {
+            switch (envelope.Payload.Type)
+            {
+                case RTCMessageType.Relay:
+                    RelayChannelMessage(envelope);
+                    break;
+                case RTCMessageType.Broadcast:
+                    BroadcastChannelMessage(envelope);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Relays the message to the specified channel
+        /// </summary>
+        /// <param name="envelope"></param>
+        private void RelayChannelMessage(RTCMessageEnvelope envelope)
+        {
+            // Not implemented
+        }
+
+        /// <summary>
+        /// Broadcasts the message to all channels except the sender
+        /// </summary>
+        /// <param name="envelope"></param>
+        private void BroadcastChannelMessage(RTCMessageEnvelope envelope)
+        {
+            var channels = _Channels.Values.SelectMany(x => x.Values);
+            foreach (var channel in channels)
+            {
+                // Exclude the sender
+                if (channel.DestinationAccount.Address == envelope.Sender.Account)
+                {
+                    continue;
+                }
+
+                try 
+                { 
+                    channel.Send(envelope.Serialize());
+                }
+                catch (Exception)
+                {
+                    // Log
                 }
             }
         }

@@ -36,6 +36,11 @@
         event EventHandler<ChannelState> OnStateChange;
 
         /// <summary>
+        /// Occurs when a message is received
+        /// </summary>
+        event EventHandler<RTCMessageEnvelope> OnMessage;
+
+        /// <summary>
         /// Occurs when the channel is disposed
         /// </summary>
         public event EventHandler OnDispose;

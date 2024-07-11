@@ -100,6 +100,7 @@ namespace Cryptopia.Node.RTC
         // Events
         public event EventHandler? OnOpen;
         public event EventHandler<ChannelState>? OnStateChange;
+        public event EventHandler<RTCMessageEnvelope>? OnMessage;
         public event EventHandler? OnDispose;
 
         /// <summary>
@@ -390,9 +391,6 @@ namespace Cryptopia.Node.RTC
 
             // Transmit over data channel
             _DataChannel.send(message);
-
-            // Log message
-            LoggingService.Log($">: {message}");
         }
 
         /// <summary>
@@ -845,33 +843,79 @@ namespace Cryptopia.Node.RTC
         protected virtual void OnDataChannelMessage(RTCDataChannel dc, DataChannelPayloadProtocols protocol, byte[] bytes)
         {
             var message = System.Text.Encoding.UTF8.GetString(bytes);
-            LoggingService.Log($"<: {message}");
 
             // Check if ping
             if (message.Equals("ping", StringComparison.InvariantCultureIgnoreCase))
             {
-                Send("pong 2");
+                Send("pong");
             }
 
             // Echo message
             else if (message.StartsWith("echo:", StringComparison.InvariantCultureIgnoreCase))
-            { 
-                Send(message.Substring("echo:".Length).TrimStart());
+            {
+                Send(message);
+            }
+
+            // Parse message
+            else if (message.TryDeserializeRTCMessage(out var envelope))
+            {
+                // Assert
+                if (null == envelope)
+                {
+                    LoggingService.LogError("Failed to deserialize message");
+                    return;
+                }
+
+                // Notify child class
+                OnReceiveMessage(envelope);
+
+                // Notify subscribers
+                OnMessage?.Invoke(this, envelope);
+            }
+            else 
+            {
+                LoggingService.LogError("Failed to deserialize message");
             }
         }
 
         #endregion
         #region "Abstract methods"
 
+        /// <summary>
+        /// Sends an SDP answer
+        /// </summary>
+        /// <param name="answer"></param>
         protected abstract void SendAnswer(SDPInfo answer);
 
-        protected abstract void SendRejection();
+        /// <summary>
+        /// Sends an SDP rejection 
+        /// </summary>
+        /// <param name="offer"></param>
+        protected abstract void SendRejection(SDPInfo offer);
 
+        /// <summary>
+        /// Sends an ICE candidate
+        /// </summary>
+        /// <param name="candidate"></param>
         protected abstract void SendCandidate(IceCandidate candidate);
 
+        /// <summary>
+        /// Called when an rejection is received
+        /// </summary>
         protected abstract void OnReceiveRejection();
 
+        /// <summary>
+        /// Called when an ICE candidate is received
+        /// </summary>
+        /// <param name="candidate"></param>
         protected abstract void OnReceiveCandidate(IceCandidate candidate);
+
+        /// <summary>
+        /// Called when a message is received
+        /// </summary>
+        /// <param name="envelope"></param>
+        protected abstract void OnReceiveMessage(RTCMessageEnvelope envelope);
+
         #endregion
     }
 }

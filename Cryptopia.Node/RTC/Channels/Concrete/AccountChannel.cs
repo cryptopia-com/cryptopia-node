@@ -43,6 +43,10 @@
             DestinationAccount = destinationAccount;
         }
 
+        /// <summary>
+        /// Sends an SDP answer
+        /// </summary>
+        /// <param name="answer"></param>
         protected override void SendAnswer(SDPInfo answer)
         {
             SignallingService.Send(new RTCMessageEnvelope()
@@ -69,7 +73,11 @@
             });
         }
 
-        protected override void SendRejection()
+        /// <summary>
+        /// Sends an SDP rejection 
+        /// </summary>
+        /// <param name="offer"></param>
+        protected override void SendRejection(SDPInfo offer)
         {
             SignallingService.Send(new RTCMessageEnvelope()
             {
@@ -92,6 +100,10 @@
             });
         }
 
+        /// <summary>
+        /// Sends an ICE candidate
+        /// </summary>
+        /// <param name="candidate"></param>
         protected override void SendCandidate(IceCandidate candidate)
         {
             SignallingService.Send(new RTCMessageEnvelope()
@@ -119,14 +131,30 @@
             });
         }
 
+        /// <summary>
+        /// Called when an rejection is received
+        /// </summary>
         protected override void OnReceiveRejection()
         {
             State = ChannelState.Rejected;
         }
 
+        /// <summary>
+        /// Called when an ICE candidate is received
+        /// </summary>
+        /// <param name="candidate"></param>
         protected override void OnReceiveCandidate(IceCandidate candidate)
         {
             AddIceCandidate(candidate);
+        }
+
+        /// <summary>
+        /// Called when a message is received
+        /// </summary>
+        /// <param name="envelope"></param>
+        protected override void OnReceiveMessage(RTCMessageEnvelope envelope)
+        { 
+           // Notthing to do here
         }
     }
 }
