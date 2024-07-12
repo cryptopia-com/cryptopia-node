@@ -847,12 +847,14 @@ namespace Cryptopia.Node.RTC
             // Check if ping
             if (message.Equals("ping", StringComparison.InvariantCultureIgnoreCase))
             {
+                LoggingService.Log($">: pong");
                 Send("pong");
             }
 
             // Echo message
             else if (message.StartsWith("echo:", StringComparison.InvariantCultureIgnoreCase))
             {
+                LoggingService.Log($">: {message.Substring("echo:".Length).TrimStart()}");
                 Send(message);
             }
 

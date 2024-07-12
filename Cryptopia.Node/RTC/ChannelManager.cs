@@ -5,8 +5,12 @@ namespace Cryptopia.Node.RTC
     /// <summary>
     /// Manages the channels to the node
     /// </summary>
-    public class ChannelManager : Singleton<ChannelManager>
+    public class ChannelManager : Singleton<ChannelManager>, IDisposable
     {
+        // Internal
+        private bool _disposed = false;
+        private readonly object _disposeLock = new object();
+
         /// <summary>
         /// Dictionary to store account channels
         /// </summary>
@@ -168,6 +172,56 @@ namespace Cryptopia.Node.RTC
                 {
                     // Log
                 }
+            }
+        }
+
+        /// <summary>
+        /// Disposes the ChannelManager and all channels.
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Disposes the ChannelManager and all channels
+        /// </summary>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+                
+            lock (_disposeLock)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                if (disposing)
+                {
+                    foreach (var accountChannels in _Channels.Values)
+                    {
+                        foreach (var channel in accountChannels.Values)
+                        {
+                            try
+                            {
+                                channel.Dispose();
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log the exception
+                                Console.WriteLine($"Error disposing channel: {ex.Message}");
+                            }
+                        }
+                    }
+                    _Channels.Clear();
+                }
+
+                _disposed = true;
             }
         }
     }

@@ -154,7 +154,7 @@
         /// <param name="envelope"></param>
         protected override void OnReceiveMessage(RTCMessageEnvelope envelope)
         { 
-           // Notthing to do here
+           // Nothing to do here
         }
     }
 }
