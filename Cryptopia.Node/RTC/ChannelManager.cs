@@ -1,15 +1,57 @@
-﻿using System.Collections.Concurrent;
+﻿using Spectre.Console;
+using System.Collections.Concurrent;
 
 namespace Cryptopia.Node.RTC
 {
     /// <summary>
-    /// Manages the channels to the node
+    /// Channel Manager
+    /// 
+    /// Manages the RTC (Real-Time Communication) channels in a decentralized mesh network
+    /// 
+    /// Responsibilities:
+    /// 1) Discover public nodes on-chain that expose public endpoints
+    /// 2) Connect to the public node(s) via WebSockets and set up communication channels
+    /// 3) Maintain and manage RTC channels for nodes and accounts
+    ///  
+    /// Roles:
+    /// - Nodes: Act as public endpoints in the mesh network, discovered on-chain and connected via WebSockets. 
+    ///   They facilitate the communication between different accounts.
+    /// - Accounts: Represent individual users (players) within the mesh network. Each account has an associated
+    ///   RTC channel that allows for direct communication with other accounts or nodes.
     /// </summary>
     public class ChannelManager : Singleton<ChannelManager>, IDisposable
     {
+        /// <summary>
+        /// True if the channel manager should outputs to the console
+        /// </summary>
+        public bool ConsoleOutput
+        {
+            get
+            {
+                return _ConsoleOutput;
+            }
+            set
+            {
+                _ConsoleOutput = value;
+                if (_ConsoleOutput)
+                {
+                    _CancellationTokenSource = new CancellationTokenSource();
+                    _UpdateStatsTask = Task.Run(
+                        () => UpdateConsole(_CancellationTokenSource.Token), _CancellationTokenSource.Token);
+                }
+                else
+                {
+                    _CancellationTokenSource?.Cancel();
+                }
+            }
+        }
+        private bool _ConsoleOutput;
+
         // Internal
-        private bool _disposed = false;
-        private readonly object _disposeLock = new object();
+        private bool _Disposed = false;
+        private readonly object _DisposeLock = new object();
+        private CancellationTokenSource? _CancellationTokenSource;
+        private Task? _UpdateStatsTask;
 
         /// <summary>
         /// Dictionary to store account channels
@@ -91,7 +133,8 @@ namespace Cryptopia.Node.RTC
 
             // Subscribe  to events
             channel.OnMessage += OnChannelMessage;
-            channel.OnDispose += (sender, args) => RemoveChannel(account, signer);
+            channel.OnTimeout += (sender, args) => RemoveChannel(account, signer, true);
+            channel.OnDispose += (sender, args) => RemoveChannel(account, signer, false);
 
             // Store in memory
             if (!_Channels.ContainsKey(account))
@@ -108,12 +151,18 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         /// <param name="account"></param>
         /// <param name="signer"></param>
-        private void RemoveChannel(string account, string signer)
+        /// <param name="dispose"></param>
+        private void RemoveChannel(string account, string signer, bool dispose)
         {
-            if (_Channels.TryGetValue(account, out var accountChannels))
+            if (_Channels.TryGetValue(account, out var channels))
             {
-                accountChannels.TryRemove(signer, out _);
-                if (accountChannels.IsEmpty)
+                channels.TryRemove(signer, out var channel);
+                if (dispose)
+                {
+                    channel?.Dispose();
+                }
+
+                if (channels.IsEmpty)
                 {
                     _Channels.TryRemove(account, out _);
                 }
@@ -176,6 +225,73 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Updates the console
+        /// </summary>
+        /// <param name="token"></param>
+        private void UpdateConsole(CancellationToken token)
+        {
+            var table = new Table();
+            table.AddColumn(new TableColumn("Account").NoWrap().Width(48));
+            table.AddColumn(new TableColumn("Device").NoWrap().Width(48));
+            table.AddColumn(new TableColumn("State").NoWrap().Width(10));
+            table.AddColumn(new TableColumn("Stable").NoWrap().Width(10));
+            table.AddColumn(new TableColumn("Polite").NoWrap().Width(10));
+            table.AddColumn(new TableColumn("Latency").NoWrap().Width(15));
+
+            AnsiConsole.Live(new Rows(
+                    new Markup("\n"), // Adding space between the text and the table
+                    new Markup("\n"), // Adding space between the text and the table
+                    new Markup("[bold yellow]\n\nCryptopia Node[/]").Centered(),
+                    new Markup("\n"), // Adding space between the text and the table
+                    new Markup("\n"), // Adding space between the text and the table
+                    new Markup($"[bold yellow]{_Channels.Keys.Count} account(s) connected[/]"),
+                    table
+                ))
+                .Start(ctx =>
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        // Clear the table before updating
+                        table.Rows.Clear();
+
+                        var totalAccounts = _Channels.Keys.Count;
+                        if (totalAccounts == 0)
+                        {
+                            table.AddEmptyRow();
+                        }
+                        else
+                        {
+                            foreach (var accountChannels in _Channels)
+                            {
+                                var account = accountChannels.Key;
+                                foreach (var channel in accountChannels.Value.Values)
+                                {
+                                    var state = channel.State.ToString();
+                                    var isStable = channel.IsStable ? "[green]Yes[/]" : "[red]No[/]";
+                                    var isPolite = channel.IsPolite ? "[green]Yes[/]" : "[red]No[/]";
+                                    var latencyColor = channel.Latency > channel.MaxLatency ? "red" : "green";
+                                    table.AddRow(account, channel.DestinationSigner.Address, state, isStable, isPolite, $"[{latencyColor}]{channel.Latency} ms[/]");
+                                }
+                            }
+                        }
+
+                        ctx.UpdateTarget(new Rows(
+                            new Markup("\n"), // Adding space between the text and the table
+                            new Markup("\n"), // Adding space between the text and the table
+                            new FigletText("Cryptopia Node").Centered().Color(Color.White),
+                            new Markup("\n"), // Adding space between the text and the table
+                            new Markup("\n"), // Adding space between the text and the table
+                            new Markup($"[bold yellow]{totalAccounts} account(s) connected[/]"),
+                            table
+                        ));
+
+                        Thread.Sleep(100); 
+                    }
+                });
+        }
+
+
+        /// <summary>
         /// Disposes the ChannelManager and all channels.
         /// </summary>
         public void Dispose()
@@ -189,14 +305,14 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         protected virtual void Dispose(bool disposing)
         {
-            if (_disposed)
+            if (_Disposed)
             {
                 return;
             }
                 
-            lock (_disposeLock)
+            lock (_DisposeLock)
             {
-                if (_disposed)
+                if (_Disposed)
                 {
                     return;
                 }
@@ -221,7 +337,7 @@ namespace Cryptopia.Node.RTC
                     _Channels.Clear();
                 }
 
-                _disposed = true;
+                _Disposed = true;
             }
         }
     }

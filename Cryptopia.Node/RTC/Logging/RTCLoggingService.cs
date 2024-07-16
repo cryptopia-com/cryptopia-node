@@ -5,6 +5,11 @@
     /// </summary>
     public class RTCLoggingService : ILoggingService
     {
+        /// <summary>
+        /// True if logging is enabled
+        /// </summary>
+        public bool WriteToConsole;
+
         // Events
         public event EventHandler<string>? OnLog;
         public event EventHandler<string>? OnInfo;
@@ -17,7 +22,11 @@
         /// <param name="message"></param>
         public void Log(string message)
         {
-            Console.WriteLine(message);
+            if (WriteToConsole)
+            {
+                Console.WriteLine(message);
+            }
+            
             OnLog?.Invoke(this, message);
         }
 
@@ -27,7 +36,11 @@
         /// <param name="message"></param>
         public void LogInfo(string message)
         {
-            Console.WriteLine($"Info: {message}");
+            if (WriteToConsole)
+            {
+                Console.WriteLine($"Info: {message}");
+            }
+            
             OnInfo?.Invoke(this, message);
         }
 
@@ -37,7 +50,11 @@
         /// <param name="message"></param>
         public void LogWarning(string message)
         {
-            Console.WriteLine($"Warning: {message}");
+            if (WriteToConsole)
+            {
+                Console.WriteLine($"Warning: {message}");
+            }
+
             OnWarning?.Invoke(this, message);
         }
 
@@ -47,7 +64,11 @@
         /// <param name="message"></param>
         public void LogError(string message)
         {
-            Console.WriteLine($"Error: {message}");
+            if (WriteToConsole)
+            {
+                Console.WriteLine($"Error: {message}");
+            }
+
             OnError?.Invoke(this, message);
         }
     }

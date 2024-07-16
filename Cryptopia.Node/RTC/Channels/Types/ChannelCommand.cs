@@ -5,6 +5,8 @@
     /// </summary>
     public enum ChannelCommand
     {
+        Ping,
+        Pong,
         Close,
         Dispose
     }

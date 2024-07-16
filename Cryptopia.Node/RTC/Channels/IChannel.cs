@@ -26,6 +26,20 @@
         bool IsInitiatedByUs { get; }
 
         /// <summary>
+        /// Max latency in milliseconds (zero means no latency)
+        /// 
+        /// The maximum latency that the channel will tolerate before self-terminating
+        /// </summary>
+        double Latency { get; }
+
+        /// <summary>
+        /// Max latency in milliseconds (zero means no latency)
+        /// 
+        /// Anything above this value will be considered high latency 
+        /// </summary>
+        double MaxLatency { get; }
+
+        /// <summary>
         /// Occurs when the channel is opened
         /// </summary>
         event EventHandler OnOpen;
@@ -39,6 +53,21 @@
         /// Occurs when a message is received
         /// </summary>
         event EventHandler<RTCMessageEnvelope> OnMessage;
+
+        /// <summary>
+        /// Occurs when the latency of the channel changes
+        /// </summary>
+        public event EventHandler<double>? OnLatency;
+
+        /// <summary>
+        /// Occurs when the channel has high latency
+        /// </summary>
+        public event EventHandler? OnHighLatency;
+
+        /// <summary>
+        /// Occurs when the channel encounters a timeout
+        /// </summary>
+        public event EventHandler? OnTimeout;
 
         /// <summary>
         /// Occurs when the channel is disposed

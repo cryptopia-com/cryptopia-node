@@ -45,8 +45,11 @@
 
         /// <summary>
         /// Sends an SDP answer
+        /// 
+        /// Transmits an SDP answer to the remote peer to complete the WebRTC handshake
         /// </summary>
-        /// <param name="answer"></param>
+        /// <param name="answer">The SDP answer to send</param>
+        /// <returns></returns>
         protected override void SendAnswer(SDPInfo answer)
         {
             SignallingService.Send(new RTCMessageEnvelope()
@@ -74,9 +77,12 @@
         }
 
         /// <summary>
-        /// Sends an SDP rejection 
+        /// Sends an SDP rejection
+        /// 
+        /// Transmits an SDP rejection to the remote peer, indicating that the offer was not accepted
         /// </summary>
-        /// <param name="offer"></param>
+        /// <param name="offer">The SDP offer to reject</param>
+        /// <returns></returns>
         protected override void SendRejection(SDPInfo offer)
         {
             SignallingService.Send(new RTCMessageEnvelope()
@@ -102,8 +108,11 @@
 
         /// <summary>
         /// Sends an ICE candidate
+        /// 
+        /// Transmits an ICE candidate to the remote peer to assist in establishing the connection
         /// </summary>
-        /// <param name="candidate"></param>
+        /// <param name="candidate">The ICE candidate to send</param>
+        /// <returns></returns>
         protected override void SendCandidate(IceCandidate candidate)
         {
             SignallingService.Send(new RTCMessageEnvelope()
@@ -132,7 +141,9 @@
         }
 
         /// <summary>
-        /// Called when an rejection is received
+        /// Handles reception of an SDP rejection
+        /// 
+        /// Processes the received SDP rejection and updates the channel state accordingly
         /// </summary>
         protected override void OnReceiveRejection()
         {
@@ -140,9 +151,11 @@
         }
 
         /// <summary>
-        /// Called when an ICE candidate is received
+        /// Handles reception of an ICE candidate
+        /// 
+        /// Processes the received ICE candidate and adds it to the local peer connection
         /// </summary>
-        /// <param name="candidate"></param>
+        /// <param name="candidate">The ICE candidate received</param>
         protected override void OnReceiveCandidate(IceCandidate candidate)
         {
             AddIceCandidate(candidate);
@@ -150,8 +163,10 @@
 
         /// <summary>
         /// Called when a message is received
+        /// 
+        /// Handles incoming messages encapsulated in an RTCMessageEnvelope
         /// </summary>
-        /// <param name="envelope"></param>
+        /// <param name="envelope">The received RTC message envelope</param>
         protected override void OnReceiveMessage(RTCMessageEnvelope envelope)
         { 
            // Nothing to do here

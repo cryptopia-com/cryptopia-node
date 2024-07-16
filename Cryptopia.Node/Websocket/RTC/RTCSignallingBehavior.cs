@@ -47,7 +47,7 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
 
     private async void HandleOfferMessage(RTCMessageEnvelope message)
     {
-        Console.WriteLine($"Received offer from {message.Sender.Account}");
+        //Console.WriteLine($"Received offer from {message.Sender.Account}");
 
         var payload = (RTCOfferMessage)message.Payload;
         var offer = payload.Offer;

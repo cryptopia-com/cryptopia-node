@@ -1,4 +1,5 @@
 ﻿using SIPSorcery.Net;
+using System.Timers;
 
 namespace Cryptopia.Node.RTC
 {
@@ -8,7 +9,10 @@ namespace Cryptopia.Node.RTC
     public abstract class BaseChannel : IChannel
     {
         /// <summary>
-        /// Returns true if the channel is stable
+        /// Indicates whether the channel is stable (thread-safe)
+        /// 
+        /// Stability in this context means that the command channel is open, and the ICE connection 
+        /// state is connected. Meaning that an RTC connection between the peers has been established
         /// </summary>
         public bool IsStable
         {
@@ -37,7 +41,7 @@ namespace Cryptopia.Node.RTC
         private bool _IsStable = false;
 
         /// <summary>
-        /// Gets the current state of the channel
+        /// Represents the current state of the channel (thread-safe)
         /// </summary>
         public ChannelState State
         {
@@ -74,14 +78,65 @@ namespace Cryptopia.Node.RTC
         private ChannelState _State;
 
         /// <summary>
-        /// Gets a value indicating whether the channel is polite
+        /// Indicates whether the channel is polite
+        /// 
+        /// A polite channel waits for the remote peer to initiate certain actions like ICE restarts or 
+        /// re-offers. This behavior helps in scenarios where both peers might try to handle the situation 
+        /// simultaneously, leading to conflicts
         /// </summary>
         public bool IsPolite { get; private set; }
 
         /// <summary>
-        /// Gets a value indicating whether the channel was initiated by us
+        /// Indicates whether the channel was initiated by us
+        /// 
+        /// This property helps in identifying the origin of the channel initiation, which can be useful 
+        /// for handling signaling and negotiation logic correctly
         /// </summary>
         public bool IsInitiatedByUs { get; private set; }
+
+        /// <summary>
+        /// Heartbeat interval in milliseconds
+        /// 
+        /// The interval at which the channel will send ping messages to the 
+        /// remote peer in order to ensure the connection is still alive
+        /// </summary>
+        public uint HeartbeatInterval { get; private set; } = 30000;
+
+        /// <summary>
+        /// Heartbeat timeout in milliseconds
+        /// 
+        /// The maximum timeout that the channel will tolerate before self-terminating
+        /// </summary>
+        public uint HeartbeatTimeout { get; private set; } = 1000;
+
+        /// <summary>
+        /// Max latency in milliseconds (zero means no latency)
+        /// 
+        /// Anything above this value will be considered high latency 
+        /// </summary>
+        public double MaxLatency { get; private set; } = 200;
+
+        /// <summary>
+        /// Max latency in milliseconds (zero means no latency)
+        /// </summary>
+        public double Latency
+        {
+            get
+            {
+                return _Latency;
+            }
+            set
+            {
+                if (_Latency != value)
+                {
+                    _Latency = value;
+
+                    // Notify
+                    OnLatency?.Invoke(this, value);
+                }
+            }
+        }
+        private double _Latency;
 
         // Services
         protected ILoggingService LoggingService { get; private set; }
@@ -93,6 +148,12 @@ namespace Cryptopia.Node.RTC
         private RTCDataChannel? _CommandChannel;
         private RTCPeerConnection? _PeerConnection;
 
+        // Heartbeat
+        private System.Timers.Timer? _HeartbeatTimer;
+        private DateTime _LastHeartbeatTime;
+        private bool _IsHeartbeatPending;
+        private bool _isHeartbeatTimeout;
+
         // Constants
         private const string DATA_CHANNEL_LABEL = "data";
         private const string COMMAND_CHANNEL_LABEL = "command";
@@ -101,6 +162,9 @@ namespace Cryptopia.Node.RTC
         public event EventHandler? OnOpen;
         public event EventHandler<ChannelState>? OnStateChange;
         public event EventHandler<RTCMessageEnvelope>? OnMessage;
+        public event EventHandler<double>? OnLatency;
+        public event EventHandler? OnHighLatency;
+        public event EventHandler? OnTimeout;
         public event EventHandler? OnDispose;
 
         /// <summary>
@@ -116,6 +180,16 @@ namespace Cryptopia.Node.RTC
 
             IsPolite = config.Polite;
             IsInitiatedByUs = config.InitiatedByUs;
+
+            if (config.HeartbeatInterval.HasValue)
+            {
+                HeartbeatInterval = config.HeartbeatInterval.Value;
+            }
+
+            if (config.MaxLatency.HasValue)
+            {
+                MaxLatency = config.MaxLatency.Value;
+            }
 
             var peerConfig = new RTCConfiguration();
             var iceServers = new List<RTCIceServer>();
@@ -155,6 +229,12 @@ namespace Cryptopia.Node.RTC
                         break;
                 }
             };
+
+            // Start heartbeat 
+            _HeartbeatTimer = new System.Timers.Timer(
+                Math.Min(HeartbeatInterval, HeartbeatTimeout));
+            _HeartbeatTimer.Elapsed += OnHeartbeatTimerElapsed;
+            _HeartbeatTimer.Start();
         }
 
         #region "Methods"
@@ -191,10 +271,13 @@ namespace Cryptopia.Node.RTC
             }
         }
 
-        /// <summary>s
-        /// Opens the channel
+        /// <summary>
+        /// (Re)opens the channel and establishes the RTC connection (thread-safe)
+        /// 
+        /// 1) Ensures a connection to the signalling server
+        /// 2) Creates an offer and sends it to the remote peer
         /// </summary>
-        /// <returns>Task that represents the asynchronous operation</returns>
+        /// <returns></returns>
         public async Task OpenAsync()
         {
             await ConnectAsync();
@@ -202,9 +285,11 @@ namespace Cryptopia.Node.RTC
 
         /// <summary>
         /// Accepts an SDP offer to establish the channel
+        /// 
+        /// Processes a received offer and generates an answer to complete the handshake 
         /// </summary>
-        /// <param name="offer">The SDP offer to accept</param>
-        /// <returns>Task that represents the asynchronous operation</returns>
+        /// <param name="offer"></param>
+        /// <returns></returns>
         public async Task AcceptAsync(SDPInfo offer)
         {
             if (IsInitiatedByUs)
@@ -284,9 +369,10 @@ namespace Cryptopia.Node.RTC
 
         /// <summary>
         /// Rejects an SDP offer
+        /// remote peer
         /// </summary>
         /// <param name="offer">The SDP offer to reject</param>
-        /// <returns>Task that represents the asynchronous operation</returns>
+        /// <returns></returns>
         public Task RejectAsync(SDPInfo offer)
         {
             throw new NotImplementedException();
@@ -294,17 +380,23 @@ namespace Cryptopia.Node.RTC
 
         /// <summary>
         /// Closes the channel
+        /// 
+        /// Handles the graceful shutdown of the channel by closing the data channel. The command channel 
+        /// remains open to allow the reopening of the channel if needed
         /// </summary>
+        /// <returns></returns>
         public Task CloseAsync()
         { 
             return CloseAsync(true);
         }
 
         /// <summary>
-        /// Closes the channel and notifies the other party if requested
+        /// Closes the channel and optionally notifies the other party
         /// 
-        /// TODO: Return result or throw
+        /// Handles the graceful shutdown of the channel by closing the data channel. The command channel 
+        /// remains open to allow the reopening of the channel if needed
         /// </summary>
+        /// <param name="notify">Indicates whether to notify the other party of the closure</param>
         private async Task CloseAsync(bool notify)
         {
             bool shouldNotifyChange;
@@ -394,6 +486,59 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Sends a heartbeat message to the remote peer
+        /// 
+        /// Sends a ping message to the remote peer over the command channel in ordert to calculate the 
+        /// round-trip latency (RTT) and detect whether the connection is still alive or not
+        /// </summary>
+        private void SendHeartbeat()
+        {
+            if (null == _CommandChannel)
+            {
+                throw new Exception("Channel not open");
+            }
+
+            // Reset 
+            _LastHeartbeatTime = DateTime.UtcNow;
+            _IsHeartbeatPending = true;
+            _isHeartbeatTimeout = false;
+
+            // Ping
+            _CommandChannel.send(ChannelCommand.Ping.ToString());
+        }
+
+        /// <summary>
+        /// Sends a pong message to the remote peer over the command channel
+        /// as a response to a ping message
+        /// </summary>
+        private void SendHeartbeatResponse()
+        {
+            if (null == _CommandChannel)
+            {
+                throw new Exception("Channel not open");
+            }
+
+            // Pong
+            _CommandChannel.send(ChannelCommand.Pong.ToString());
+        }
+
+        /// <summary>
+        /// Receives a pong message from the remote peer over the command channel
+        /// as a response to a ping message
+        /// </summary>
+        private void ReceiveHeartbeatResponse()
+        {
+            _IsHeartbeatPending = false;
+            Latency = (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds;
+
+            // High latency?
+            if (Latency > MaxLatency)
+            {
+                OnHighLatencyDetected();
+            }
+        }
+
+        /// <summary>
         /// Check if the connection is stable
         /// </summary>
         /// <returns></returns>
@@ -422,10 +567,10 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Modifies the stable value of the channel (should be called within a lock)
+        /// Sets the stability status of the channel (not thread-safe)
         /// </summary>
-        /// <param name="value"></param>
-        /// <param name="shouldNotifyChange"></param>
+        /// <param name="value">The new stability status</param>
+        /// <param name="shouldNotifyChange">Indicates whether a notification should be triggered</param>
         private void SetStable(bool value, out bool shouldNotifyChange)
         {
             shouldNotifyChange = false;
@@ -443,11 +588,11 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Modifies the state of the channel (should be called within a lock)
+        /// Sets the state of the channel (not thread-safe)
         /// </summary>
-        /// <param name="value"></param>
-        /// <param name="shouldNotifyChange"></param>
-        /// <param name="shouldNotifyOpen"></param>
+        /// <param name="value">The new channel state</param>
+        /// <param name="shouldNotifyChange">Indicates whether a notification should be triggered</param>
+        /// <param name="shouldNotifyOpen">Indicates whether an open notification should be triggered</param>
         private void SetState(ChannelState value, out bool shouldNotifyChange, out bool shouldNotifyOpen)
         {
             shouldNotifyChange = false;
@@ -471,8 +616,10 @@ namespace Cryptopia.Node.RTC
 
         /// <summary>
         /// Sets the data channel
+        /// 
+        /// Assigns the data channel and sets up its event handlers
         /// </summary>
-        /// <param name="channel"></param>
+        /// <param name="channel">The data channel to set</param>
         private void SetDataChannel(RTCDataChannel channel)
         {
             if (null != _DataChannel)
@@ -522,8 +669,10 @@ namespace Cryptopia.Node.RTC
 
         /// <summary>
         /// Sets the command channel
+        /// 
+        /// Assigns the command channel and sets up its event handlers
         /// </summary>
-        /// <param name="channel"></param>
+        /// <param name="channel">The command channel to set</param>
         private void SetCommandChannel(RTCDataChannel channel)
         {
             if (null != _CommandChannel)
@@ -543,9 +692,11 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Adds an ICE candidate to the channel
+        /// Adds an ICE candidate to the peer connection
+        /// 
+        /// Handles the reception and addition of ICE candidates necessary for establishing the WebRTC connection
         /// </summary>
-        /// <param name="candidate"></param>
+        /// <param name="candidate">The ICE candidate to add</param>
         protected void AddIceCandidate(IceCandidate candidate)
         {
             if (null == _PeerConnection)
@@ -576,7 +727,9 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Disposes the channel
+        /// Disposes the channel and frees resources
+        /// 
+        /// Handles the cleanup of resources when the channel is no longer needed and notifies the other party
         /// </summary>
         public void Dispose()
         {
@@ -585,9 +738,11 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Disposes the channel
+        /// Disposes the channel and optionally disposes managed resources
+        /// 
+        /// Handles the cleanup of resources when the channel is no longer needed and notifies the other party
         /// </summary>
-        /// <param name="shouldDispose"></param>
+        /// <param name="shouldDispose">Indicates whether managed resources should be disposed</param>
         /// <returns></returns>
         protected virtual async Task Dispose(bool shouldDispose)
         {
@@ -628,6 +783,16 @@ namespace Cryptopia.Node.RTC
                         peerConnection = _PeerConnection;
                     }
 
+                    // Stop heartbeat
+                    if (_HeartbeatTimer != null)
+                    {
+                        _HeartbeatTimer.Stop();
+                        _HeartbeatTimer.Elapsed -= OnHeartbeatTimerElapsed;
+                        _HeartbeatTimer.Dispose();
+                        _HeartbeatTimer = null;
+                    }
+
+                    // Dispose managed resources
                     if (commandChannel != null)
                     {
                         if (commandChannel.readyState == RTCDataChannelState.open)
@@ -689,13 +854,16 @@ namespace Cryptopia.Node.RTC
         {
             Dispose(false).GetAwaiter().GetResult();
         }
+
         #endregion
         #region "Event Handlers"
 
         /// <summary>
-        /// Called when a new ICE candidate is available
+        /// Event handler for ICE candidate reception
+        /// 
+        /// Processes incoming ICE candidates and adds them to the peer connection
         /// </summary>
-        /// <param name="candidate"></param>
+        /// <param name="candidate">The ICE candidate received</param>
         protected virtual void OnOnIceCandidate(RTCIceCandidate candidate)
         {
             if (candidate == null || string.IsNullOrEmpty(candidate.candidate))
@@ -716,9 +884,11 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when the ICE connection state changes
+        /// Event handler for ICE connection state change
+        /// 
+        /// Handles changes in the ICE connection state and updates the channel state accordingly
         /// </summary>
-        /// <param name="state"></param>
+        /// <param name="state">The new ICE connection state</param>
         protected virtual void OnIceConnectionChange(RTCIceConnectionState state)
         {
             if (state != RTCIceConnectionState.connected)
@@ -730,7 +900,9 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when the connection is stable
+        /// Handles actions when the connection becomes stable
+        /// 
+        /// Stability indicates that the command channel is open and the ICE connection is established
         /// </summary>
         protected virtual void OnStable()
         {
@@ -750,7 +922,9 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when the command channel is open
+        /// Event handler for command channel open event
+        /// 
+        /// Called when the command channel is successfully opened
         /// </summary>
         protected virtual void OnCommandChannelOpen()
         {
@@ -759,6 +933,8 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Event handler for command channel close event
+        /// 
         /// Called when the command channel is closed
         /// </summary>
         protected virtual void OnCommandChannelClose()
@@ -767,9 +943,11 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when an error occurs on the command channel
+        /// Event handler for command channel errors
+        /// 
+        /// Handles errors that occur on the command channel and updates the channel state accordingly
         /// </summary>
-        /// <param name="error"></param>
+        /// <param name="error">The error that occurred</param>
         protected virtual void OnCommandChannelError(string error)
         {
             LoggingService.LogError(error);
@@ -777,7 +955,9 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when a message is received on the command channel
+        /// Event handler for messages received on the command channel
+        /// 
+        /// Processes incoming messages on the command channel
         /// </summary>
         /// <param name="dc"></param>
         /// <param name="protocol"></param>
@@ -797,6 +977,14 @@ namespace Cryptopia.Node.RTC
             // Execute command
             switch (command)
             {
+                case ChannelCommand.Ping:
+                    SendHeartbeatResponse(); // Send pong
+                    break;
+
+                case ChannelCommand.Pong:
+                    ReceiveHeartbeatResponse(); // Receive pong
+                    break;
+
                 case ChannelCommand.Close:
                     Task.Run(() => CloseAsync(false));
                     break;
@@ -808,7 +996,9 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when the data channel is open
+        /// Event handler for data channel open event
+        /// 
+        /// Called when the data channel is successfully opened
         /// </summary>
         protected virtual void OnDataChannelOpen()
         {
@@ -817,6 +1007,8 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Event handler for data channel close event
+        /// 
         /// Called when the data channel is closed
         /// </summary>
         protected virtual void OnDataChannelClose()
@@ -825,9 +1017,11 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when an error occurs on the data channel
+        /// Event handler for data channel errors
+        /// 
+        /// Handles errors that occur on the data channel and updates the channel state accordingly
         /// </summary>
-        /// <param name="error"></param>
+        /// <param name="error">The error that occurred</param>
         protected virtual void OnDataChannelError(string error)
         {
             LoggingService.LogError(error);
@@ -835,7 +1029,9 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
-        /// Called when a message is received on the data channel
+        /// Event handler for messages received on the data channel
+        /// 
+        /// Processes incoming messages on the data channel
         /// </summary>
         /// <param name="dc"></param>
         /// <param name="protocol"></param>
@@ -880,42 +1076,106 @@ namespace Cryptopia.Node.RTC
             }
         }
 
+        /// <summary>
+        /// Called when the heartbeat timer elapses
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void OnHeartbeatTimerElapsed(object? sender, ElapsedEventArgs e)
+        {
+            if (!IsStable)
+            {
+                return;
+            }
+
+            if (_IsHeartbeatPending)
+            {
+                // Heartbeat Timeout?
+                if (!_isHeartbeatTimeout && (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds > HeartbeatTimeout)
+                {
+                    _isHeartbeatTimeout = true;
+                    OnHeartbeatTimeout();
+                }
+            }
+            else
+            {
+                // Heartbeat pending?
+                if ((DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds >= HeartbeatInterval)
+                {
+                    SendHeartbeat();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called when the heartbeat times out
+        /// </summary>
+        private void OnHeartbeatTimeout()
+        {
+            LoggingService.LogError("Heartbeat timeout");
+            OnTimeout?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// Called when high latency is detected
+        /// </summary>
+        private void OnHighLatencyDetected()
+        {
+            LoggingService.LogWarning("High latency detected");
+            OnHighLatency?.Invoke(this, EventArgs.Empty);
+        }
+
         #endregion
         #region "Abstract methods"
 
         /// <summary>
         /// Sends an SDP answer
+        /// 
+        /// Transmits an SDP answer to the remote peer to complete the WebRTC handshake
         /// </summary>
-        /// <param name="answer"></param>
+        /// <param name="answer">The SDP answer to send</param>
+        /// <returns></returns>
         protected abstract void SendAnswer(SDPInfo answer);
 
         /// <summary>
-        /// Sends an SDP rejection 
+        /// Sends an SDP rejection
+        /// 
+        /// Transmits an SDP rejection to the remote peer, indicating that the offer was not accepted
         /// </summary>
-        /// <param name="offer"></param>
+        /// <param name="offer">The SDP offer to reject</param>
+        /// <returns></returns>
         protected abstract void SendRejection(SDPInfo offer);
 
         /// <summary>
         /// Sends an ICE candidate
+        /// 
+        /// Transmits an ICE candidate to the remote peer to assist in establishing the connection
         /// </summary>
-        /// <param name="candidate"></param>
+        /// <param name="candidate">The ICE candidate to send</param>
+        /// <returns></returns>
         protected abstract void SendCandidate(IceCandidate candidate);
 
         /// <summary>
-        /// Called when an rejection is received
+        /// Handles reception of an SDP rejection
+        /// 
+        /// Processes the received SDP rejection and updates the channel state accordingly
         /// </summary>
         protected abstract void OnReceiveRejection();
 
         /// <summary>
-        /// Called when an ICE candidate is received
+        /// Handles reception of an ICE candidate
+        /// 
+        /// Processes the received ICE candidate and adds it to the local peer connection
         /// </summary>
-        /// <param name="candidate"></param>
+        /// <param name="candidate">The ICE candidate received</param>
         protected abstract void OnReceiveCandidate(IceCandidate candidate);
 
         /// <summary>
         /// Called when a message is received
+        /// 
+        /// Handles incoming messages encapsulated in an RTCMessageEnvelope
         /// </summary>
-        /// <param name="envelope"></param>
+        /// <param name="envelope">The received RTC message envelope</param>
         protected abstract void OnReceiveMessage(RTCMessageEnvelope envelope);
 
         #endregion
