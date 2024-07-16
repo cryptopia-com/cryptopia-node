@@ -290,7 +290,6 @@ namespace Cryptopia.Node.RTC
                 });
         }
 
-
         /// <summary>
         /// Disposes the ChannelManager and all channels.
         /// </summary>

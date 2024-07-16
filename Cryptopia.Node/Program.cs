@@ -20,7 +20,7 @@ public class Program
         Console.WriteLine($"WebSocket server listing on port {port}");
 
         // Configure the ChannelManager
-        ChannelManager.Instance.ConsoleOutput = true;
+        ChannelManager.Instance.ConsoleOutput = false;
 
         // Keep the application running
         Console.CancelKeyPress += (sender, e) => 
