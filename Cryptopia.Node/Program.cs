@@ -263,7 +263,7 @@ public class Program
             while (!token.IsCancellationRequested)
             {
                 Console.Write("> ");
-                string input = await Task.Run(() => Console.ReadLine(), token);
+                string input = await Task.Run(() => Console.In.ReadLineAsync().GetAwaiter().GetResult(), token);
 
                 if (string.IsNullOrEmpty(input))
                 {
