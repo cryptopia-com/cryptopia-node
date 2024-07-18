@@ -7,3 +7,5 @@ services:
     network_mode: "host"
     environment:
       - PUBLIC_IP=0.0.0.0
+    stdin_open: true
+    tty: true
