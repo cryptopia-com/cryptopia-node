@@ -263,16 +263,8 @@ public class Program
             while (!token.IsCancellationRequested)
             {
                 Console.Write("> ");
-                while (!Console.KeyAvailable)
-                {
-                    await Task.Delay(100, token);
-                    if (token.IsCancellationRequested)
-                    {
-                        return;
-                    } 
-                }
+                string input = await Console.In.ReadLineAsync();
 
-                var input = Console.ReadLine();
                 if (string.IsNullOrEmpty(input))
                 {
                     continue;
@@ -289,7 +281,6 @@ public class Program
             }
         }, token);
     }
-
 
     /// <summary>
     /// Display the version information
