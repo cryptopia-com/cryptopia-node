@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Cryptopia.Node": {
+      "commandName": "Project",
+      "commandLineArgs": "--stream"
+    }
+  }
+}

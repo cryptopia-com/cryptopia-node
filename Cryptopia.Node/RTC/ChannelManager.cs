@@ -21,37 +21,9 @@ namespace Cryptopia.Node.RTC
     /// </summary>
     public class ChannelManager : Singleton<ChannelManager>, IDisposable
     {
-        /// <summary>
-        /// True if the channel manager should outputs to the console
-        /// </summary>
-        public bool ConsoleOutput
-        {
-            get
-            {
-                return _ConsoleOutput;
-            }
-            set
-            {
-                _ConsoleOutput = value;
-                if (_ConsoleOutput)
-                {
-                    _CancellationTokenSource = new CancellationTokenSource();
-                    _UpdateStatsTask = Task.Run(
-                        () => UpdateConsole(_CancellationTokenSource.Token), _CancellationTokenSource.Token);
-                }
-                else
-                {
-                    _CancellationTokenSource?.Cancel();
-                }
-            }
-        }
-        private bool _ConsoleOutput;
-
         // Internal
         private bool _Disposed = false;
         private readonly object _DisposeLock = new object();
-        private CancellationTokenSource? _CancellationTokenSource;
-        private Task? _UpdateStatsTask;
 
         /// <summary>
         /// Dictionary to store account channels
@@ -82,6 +54,27 @@ namespace Cryptopia.Node.RTC
             }
 
             return _Channels[account].ContainsKey(signer);
+        }
+
+        /// <summary>
+        /// Returns the total number of channels
+        /// </summary>
+        /// <returns></returns>
+        public int GetChannelCount()
+        {
+            return _Channels.Keys.Count;
+        }
+
+        /// <summary>
+        /// Returns the channels
+        /// </summary>
+        /// <returns></returns>
+        public IDictionary<string, IDictionary<string, IAccountChannel>> GetChannels()
+        {
+            // Copy the channels
+            return _Channels.ToDictionary(
+                x => x.Key, x => x.Value.ToDictionary(
+                    y => y.Key, y => y.Value) as IDictionary<string, IAccountChannel>);
         }
 
         /// <summary>
@@ -222,72 +215,6 @@ namespace Cryptopia.Node.RTC
                     // Log
                 }
             }
-        }
-
-        /// <summary>
-        /// Updates the console
-        /// </summary>
-        /// <param name="token"></param>
-        private void UpdateConsole(CancellationToken token)
-        {
-            var table = new Table();
-            table.AddColumn(new TableColumn("Account").NoWrap().Width(48));
-            table.AddColumn(new TableColumn("Device").NoWrap().Width(48));
-            table.AddColumn(new TableColumn("State").NoWrap().Width(10));
-            table.AddColumn(new TableColumn("Stable").NoWrap().Width(10));
-            table.AddColumn(new TableColumn("Polite").NoWrap().Width(10));
-            table.AddColumn(new TableColumn("Latency").NoWrap().Width(15));
-
-            AnsiConsole.Live(new Rows(
-                    new Markup("\n"), // Adding space between the text and the table
-                    new Markup("\n"), // Adding space between the text and the table
-                    new Markup("[bold yellow]\n\nCryptopia Node[/]").Centered(),
-                    new Markup("\n"), // Adding space between the text and the table
-                    new Markup("\n"), // Adding space between the text and the table
-                    new Markup($"[bold yellow]{_Channels.Keys.Count} account(s) connected[/]"),
-                    table
-                ))
-                .Start(ctx =>
-                {
-                    while (!token.IsCancellationRequested)
-                    {
-                        // Clear the table before updating
-                        table.Rows.Clear();
-
-                        var totalAccounts = _Channels.Keys.Count;
-                        if (totalAccounts == 0)
-                        {
-                            table.AddEmptyRow();
-                        }
-                        else
-                        {
-                            foreach (var accountChannels in _Channels)
-                            {
-                                var account = accountChannels.Key;
-                                foreach (var channel in accountChannels.Value.Values)
-                                {
-                                    var state = channel.State.ToString();
-                                    var isStable = channel.IsStable ? "[green]Yes[/]" : "[red]No[/]";
-                                    var isPolite = channel.IsPolite ? "[green]Yes[/]" : "[red]No[/]";
-                                    var latencyColor = channel.Latency > channel.MaxLatency ? "red" : "green";
-                                    table.AddRow(account, channel.DestinationSigner.Address, state, isStable, isPolite, $"[{latencyColor}]{channel.Latency} ms[/]");
-                                }
-                            }
-                        }
-
-                        ctx.UpdateTarget(new Rows(
-                            new Markup("\n"), // Adding space between the text and the table
-                            new Markup("\n"), // Adding space between the text and the table
-                            new FigletText("Cryptopia Node").Centered().Color(Color.White),
-                            new Markup("\n"), // Adding space between the text and the table
-                            new Markup("\n"), // Adding space between the text and the table
-                            new Markup($"[bold yellow]{totalAccounts} account(s) connected[/]"),
-                            table
-                        ));
-
-                        Thread.Sleep(100); 
-                    }
-                });
         }
 
         /// <summary>
