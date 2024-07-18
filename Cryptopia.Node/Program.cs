@@ -238,7 +238,9 @@ public class Program
     private static void StartListening()
     {
         _ListeningCTS = new CancellationTokenSource();
-        _ListeningTask = Task.Run(() => Listen(_ListeningCTS.Token));
+        //_ListeningTask = Task.Run(() => Listen(_ListeningCTS.Token));
+
+        Listen(_ListeningCTS.Token);
     }
 
     /// <summary>
@@ -258,28 +260,25 @@ public class Program
     /// <param name="token"></param>
     private static void Listen(CancellationToken token)
     {
-        Task.Run(async () =>
+        while (!token.IsCancellationRequested)
         {
-            while (!token.IsCancellationRequested)
+            Console.Write("> ");
+            string input = Console.ReadLine();
+
+            if (string.IsNullOrEmpty(input))
             {
-                Console.Write("> ");
-                string input = await Console.In.ReadLineAsync();
-
-                if (string.IsNullOrEmpty(input))
-                {
-                    continue;
-                }
-
-                var args = input.Split(' ');
-                Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions>(args)
-                    .MapResult(
-                        (VersionOptions opts) => RunVersionCommand(),
-                        (StatusOptions opts) => RunStatusCommand(),
-                        (StreamOptions opts) => RunStreamCommand(),
-                        (ListOptions opts) => RunListCommand(opts.All),
-                        errs => HandleParseError(errs));
+                continue;
             }
-        }, token);
+
+            var args = input.Split(' ');
+            Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions>(args)
+                .MapResult(
+                    (VersionOptions opts) => RunVersionCommand(),
+                    (StatusOptions opts) => RunStatusCommand(),
+                    (StreamOptions opts) => RunStreamCommand(),
+                    (ListOptions opts) => RunListCommand(opts.All),
+                    errs => HandleParseError(errs));
+        }
     }
 
     /// <summary>
