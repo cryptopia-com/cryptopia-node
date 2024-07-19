@@ -47,14 +47,18 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
 
     private async void HandleOfferMessage(RTCMessageEnvelope message)
     {
-        //Console.WriteLine($"Received offer from {message.Sender.Account}");
-
         var payload = (RTCOfferMessage)message.Payload;
         var offer = payload.Offer;
 
         if (null == offer)
         {
             Console.WriteLine("(!) Offer cannot be empty");
+            return;
+        }
+
+        if (message.Sender.Account == null || message.Sender.Signer == null)
+        {
+            Console.WriteLine("(!) Sender account or signer cannot be empty");
             return;
         }
 

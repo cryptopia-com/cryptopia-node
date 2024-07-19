@@ -127,7 +127,7 @@
 
             if (null == DestinationAccount)
             {
-                throw new ArgumentNullException("Destination account is null");
+                throw new ArgumentNullException($"Destination account is null; State: State");
             }
 
             if (null == DestinationSigner)
