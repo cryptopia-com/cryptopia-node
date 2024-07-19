@@ -115,6 +115,31 @@
         /// <returns></returns>
         protected override void SendCandidate(IceCandidate candidate)
         {
+            if (null == SignallingService)
+            {
+                throw new ArgumentNullException("Signalling is null");
+            }
+
+            if (null == candidate)
+            {
+                throw new ArgumentNullException("Candidate is null");
+            }
+
+            if (null == DestinationAccount)
+            {
+                throw new ArgumentNullException("Destination account is null");
+            }
+
+            if (null == DestinationSigner)
+            {
+                throw new ArgumentNullException("Destination signer is null");
+            }
+
+            if (null == OriginSigner)
+            {
+                throw new ArgumentNullException("Origin signer is null");
+            }
+
             SignallingService.Send(new RTCMessageEnvelope()
             {
                 Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),
