@@ -117,27 +117,27 @@
         {
             if (null == SignallingService)
             {
-                throw new ArgumentNullException("Signalling is null");
+                throw new ArgumentNullException($"Signalling is null; State: {State.ToString()}");
             }
 
             if (null == candidate)
             {
-                throw new ArgumentNullException("Candidate is null");
+                throw new ArgumentNullException($"Candidate is null; State: {State.ToString()}");
             }
 
             if (null == DestinationAccount)
             {
-                throw new ArgumentNullException($"Destination account is null; State: State");
+                throw new ArgumentNullException($"Destination account is null; State: {State.ToString()}");
             }
 
             if (null == DestinationSigner)
             {
-                throw new ArgumentNullException("Destination signer is null");
+                throw new ArgumentNullException($"Destination signer is null; State: {State.ToString()}");
             }
 
             if (null == OriginSigner)
             {
-                throw new ArgumentNullException("Origin signer is null");
+                throw new ArgumentNullException($"Origin signer is null; State: {State.ToString()}");
             }
 
             SignallingService.Send(new RTCMessageEnvelope()
