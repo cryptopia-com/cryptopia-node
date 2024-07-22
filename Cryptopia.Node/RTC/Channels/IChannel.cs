@@ -31,14 +31,14 @@
         /// The interval at which the channel will send ping messages to the 
         /// remote peer in order to ensure the connection is still alive
         /// </summary>
-        public double HeartbeatInterval { get; }
+        double HeartbeatInterval { get; }
 
         /// <summary>
         /// Heartbeat timeout in milliseconds
         /// 
         /// The maximum timeout that the channel will tolerate before self-terminating
         /// </summary>
-        public double HeartbeatTimeout { get; }
+        double HeartbeatTimeout { get; }
 
         /// <summary>
         /// Max latency in milliseconds (zero means no latency)
@@ -72,22 +72,22 @@
         /// <summary>
         /// Occurs when the latency of the channel changes
         /// </summary>
-        public event EventHandler<double>? OnLatency;
+        event EventHandler<double> OnLatency;
 
         /// <summary>
         /// Occurs when the channel has high latency
         /// </summary>
-        public event EventHandler? OnHighLatency;
+        event EventHandler OnHighLatency;
 
         /// <summary>
         /// Occurs when the channel encounters a timeout
         /// </summary>
-        public event EventHandler? OnTimeout;
+        event EventHandler OnTimeout;
 
         /// <summary>
         /// Occurs when the channel is disposed
         /// </summary>
-        public event EventHandler OnDispose;
+        event EventHandler OnDispose;
 
         /// <summary>
         /// Opens the channel

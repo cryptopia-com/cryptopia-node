@@ -18,7 +18,7 @@ namespace Cryptopia.Node.RTC
         {
             get
             {
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     return _IsStable;
                 }
@@ -26,7 +26,7 @@ namespace Cryptopia.Node.RTC
             private set
             {
                 var shouldNotify = false;
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     SetStable(value,
                         out shouldNotify);
@@ -47,7 +47,7 @@ namespace Cryptopia.Node.RTC
         {
             get
             {
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     return _State;
                 }
@@ -55,7 +55,7 @@ namespace Cryptopia.Node.RTC
             protected set
             {
                 bool shouldNotifyChane, shouldNotifyOpen;
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     SetState(value,
                         out shouldNotifyChane,
@@ -123,16 +123,41 @@ namespace Cryptopia.Node.RTC
         {
             get
             {
-                return _Latency;
+                lock (_HeartbeatLock)
+                {
+                    return _Latency;
+                }  
             }
             set
             {
-                if (_Latency != value)
+                bool shouldNotifyChange, shouldNotifyHighLatency;
+                lock (_HeartbeatLock)
                 {
-                    _Latency = value;
+                    if (!_IsHeartbeatPending)
+                    {
+                        return;
+                    }
 
-                    // Notify
-                    OnLatency?.Invoke(this, value);
+                    _IsHeartbeatPending = false;
+
+                    // Calculate latency
+                    var nextLatency = (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds;
+                    SetLatency(
+                       nextLatency,
+                       out shouldNotifyChange,
+                       out shouldNotifyHighLatency);
+                }
+
+                // Notify change
+                if (shouldNotifyChange)
+                {
+                    OnLatency?.Invoke(this, _Latency);
+                }
+
+                // Notify high latency
+                if (shouldNotifyHighLatency)
+                {
+                    OnHighLatencyDetected();
                 }
             }
         }
@@ -143,7 +168,7 @@ namespace Cryptopia.Node.RTC
         protected ISignallingService SignallingService { get; private set; }
 
         // Internal
-        private readonly object _Lock = new object();
+        private readonly object _ChannelLock = new object();
         private RTCDataChannel? _DataChannel;
         private RTCDataChannel? _CommandChannel;
         private RTCPeerConnection? _PeerConnection;
@@ -153,7 +178,7 @@ namespace Cryptopia.Node.RTC
         private System.Timers.Timer? _HeartbeatTimer;
         private DateTime _LastHeartbeatTime;
         private bool _IsHeartbeatPending;
-        private bool _isHeartbeatTimeout;
+        private bool _IsHeartbeatTimeout;
 
         // Constants
         private const string DATA_CHANNEL_LABEL = "data";
@@ -211,7 +236,7 @@ namespace Cryptopia.Node.RTC
             }
             peerConfig.iceServers = iceServerList;
 
-            lock (_Lock)
+            lock (_ChannelLock)
             {
                 if (null != _PeerConnection)
                 {
@@ -259,6 +284,11 @@ namespace Cryptopia.Node.RTC
         /// <exception cref="InvalidOperationException"></exception>
         public T StartHeartbeat(double? interval = null, double? timeout = null)
         {
+            if (null == _PeerConnection)
+            {
+                throw new InvalidOperationException("Peer connection not initialized");
+            }
+
             lock (_HeartbeatLock)
             {
                 if (null != _HeartbeatTimer)
@@ -291,6 +321,7 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         public void StopHeartbeat()
         {
+            bool shouldNotifyChange, shouldNotifyHighLatency;
             lock (_HeartbeatLock)
             {
                 if (null != _HeartbeatTimer)
@@ -302,9 +333,25 @@ namespace Cryptopia.Node.RTC
                 }
                 
                 HeartbeatInterval = 0; // Stopped  
+                _IsHeartbeatPending = false;
+
+                SetLatency(
+                   0, // No latency data available
+                   out shouldNotifyChange,
+                   out shouldNotifyHighLatency);
             }
 
-            Latency = 0; // No latency data available
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnLatency?.Invoke(this, _Latency);
+            }
+
+            // Notify high latency
+            if (shouldNotifyHighLatency)
+            {
+                OnHighLatencyDetected();
+            }
         }
 
         /// <summary>
@@ -379,7 +426,7 @@ namespace Cryptopia.Node.RTC
 
             // Indicate signalling started
             bool shouldNotifyChange;
-            lock (_Lock)
+            lock (_ChannelLock)
             {
                 if (_State != ChannelState.Connecting)
                 {
@@ -468,7 +515,7 @@ namespace Cryptopia.Node.RTC
         private async Task CloseAsync(bool notify)
         {
             bool shouldNotifyChange;
-            lock (_Lock)
+            lock (_ChannelLock)
             {
                 if (_State != ChannelState.Open)
                 {
@@ -493,7 +540,7 @@ namespace Cryptopia.Node.RTC
                 RTCDataChannel? commandChannel;
                 RTCDataChannel? dataChannel;
 
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     commandChannel = _CommandChannel;
                     dataChannel = _DataChannel;
@@ -524,7 +571,7 @@ namespace Cryptopia.Node.RTC
             }
             finally
             {
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     // Free unmanaged resources
                     _DataChannel = null;
@@ -546,7 +593,7 @@ namespace Cryptopia.Node.RTC
         {
             if (State != ChannelState.Open || null == _DataChannel)
             {
-                throw new Exception("Channel not open");
+                throw new InvalidOperationException("Channel not open");
             }
 
             // Transmit over data channel
@@ -563,7 +610,7 @@ namespace Cryptopia.Node.RTC
         {
             if (null == _CommandChannel)
             {
-                throw new Exception("Channel not open");
+                throw new InvalidOperationException("Channel not open");
             }
 
             // Reset 
@@ -577,7 +624,7 @@ namespace Cryptopia.Node.RTC
 
                 _LastHeartbeatTime = DateTime.UtcNow;
                 _IsHeartbeatPending = true;
-                _isHeartbeatTimeout = false;
+                _IsHeartbeatTimeout = false;
             }
 
             // Ping
@@ -592,7 +639,7 @@ namespace Cryptopia.Node.RTC
         {
             if (null == _CommandChannel)
             {
-                throw new Exception("Channel not open");
+                throw new InvalidOperationException("Channel not open");
             }
 
             // Pong
@@ -605,6 +652,7 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         private void ReceiveHeartbeatResponse()
         {
+            bool shouldNotifyChange, shouldNotifyHighLatency;
             lock (_HeartbeatLock)
             {
                 if (!_IsHeartbeatPending)
@@ -613,13 +661,23 @@ namespace Cryptopia.Node.RTC
                 }
 
                 _IsHeartbeatPending = false;
+
+                // Calculate latency
+                var nextLatency = (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds;
+                SetLatency(
+                   nextLatency,
+                   out shouldNotifyChange,
+                   out shouldNotifyHighLatency);
             }
 
-            // Calculate latency
-            Latency = (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds;
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnLatency?.Invoke(this, _Latency);
+            }
 
-            // High latency?
-            if (Latency > MaxLatency)
+            // Notify high latency
+            if (shouldNotifyHighLatency)
             {
                 OnHighLatencyDetected();
             }
@@ -702,6 +760,34 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Sets the latency (not thread-safe)
+        /// </summary>
+        /// <param name="value"></param>
+        /// <param name="shouldNotifyChange"></param>
+        /// <param name="shouldNotifyHighLatency"></param>
+
+        private void SetLatency(double value, out bool shouldNotifyChange, out bool shouldNotifyHighLatency)
+        {
+            shouldNotifyChange = false;
+            shouldNotifyHighLatency = false;
+
+            // Unchanged
+            if (_Latency == value)
+            {
+                return;
+            }
+
+            _Latency = value;
+
+            // Notify outside the lock
+            shouldNotifyChange = true;
+            if (_Latency > MaxLatency)
+            {
+                shouldNotifyHighLatency = true;
+            }
+        }
+
+        /// <summary>
         /// Sets the data channel
         /// 
         /// Assigns the data channel and sets up its event handlers
@@ -725,7 +811,7 @@ namespace Cryptopia.Node.RTC
             if (CheckStable() && _DataChannel.readyState == RTCDataChannelState.open)
             {
                 bool shouldNotifyChange, shouldNotifyOpen;
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     if (_State == ChannelState.Closing ||
                         _State == ChannelState.Disposing ||
@@ -834,7 +920,7 @@ namespace Cryptopia.Node.RTC
         protected virtual async Task Dispose(bool shouldDispose)
         {
             bool shouldNotifyChange;
-            lock (_Lock)
+            lock (_ChannelLock)
             {
                 if (_State == ChannelState.Disposing ||
                     _State == ChannelState.Disposed)
@@ -863,7 +949,7 @@ namespace Cryptopia.Node.RTC
                     RTCDataChannel? dataChannel;
                     RTCPeerConnection? peerConnection;
 
-                    lock (_Lock)
+                    lock (_ChannelLock)
                     {
                         commandChannel = _CommandChannel;
                         dataChannel = _DataChannel;
@@ -912,7 +998,7 @@ namespace Cryptopia.Node.RTC
             }
             finally
             {
-                lock (_Lock)
+                lock (_ChannelLock)
                 {
                     // Free unmanaged resources
                     _DataChannel = null;
@@ -1177,9 +1263,9 @@ namespace Cryptopia.Node.RTC
                 if (_IsHeartbeatPending)
                 {
                     // Heartbeat Timeout?
-                    if (!_isHeartbeatTimeout && (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds > HeartbeatTimeout)
+                    if (!_IsHeartbeatTimeout && (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds > HeartbeatTimeout)
                     {
-                        _isHeartbeatTimeout = true;
+                        _IsHeartbeatTimeout = true;
                         notifyHeartBeatTimeout = true;
                     }
                 }
