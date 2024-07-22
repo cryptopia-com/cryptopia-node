@@ -6,7 +6,7 @@ namespace Cryptopia.Node.RTC
     /// <summary>
     /// Represents a communication channel in the mesh network
     /// </summary>
-    public abstract class BaseChannel : IChannel
+    public abstract class BaseChannel<T>  where T : BaseChannel<T>, IChannel
     {
         /// <summary>
         /// Indicates whether the channel is stable (thread-safe)
@@ -100,24 +100,24 @@ namespace Cryptopia.Node.RTC
         /// The interval at which the channel will send ping messages to the 
         /// remote peer in order to ensure the connection is still alive
         /// </summary>
-        public uint HeartbeatInterval { get; private set; } = 30000;
+        public double HeartbeatInterval { get; private set; } = 5000;
 
         /// <summary>
         /// Heartbeat timeout in milliseconds
         /// 
         /// The maximum timeout that the channel will tolerate before self-terminating
         /// </summary>
-        public uint HeartbeatTimeout { get; private set; } = 1000;
+        public double HeartbeatTimeout { get; private set; } = 1000;
 
         /// <summary>
         /// Max latency in milliseconds (zero means no latency)
         /// 
         /// Anything above this value will be considered high latency 
         /// </summary>
-        public double MaxLatency { get; private set; } = 200;
+        public double MaxLatency { get; set; } = 200;
 
         /// <summary>
-        /// Max latency in milliseconds (zero means no latency)
+        /// Max latency in milliseconds (zero means no latency data available)
         /// </summary>
         public double Latency
         {
@@ -149,6 +149,7 @@ namespace Cryptopia.Node.RTC
         private RTCPeerConnection? _PeerConnection;
 
         // Heartbeat
+        private readonly object _HeartbeatLock = new object();
         private System.Timers.Timer? _HeartbeatTimer;
         private DateTime _LastHeartbeatTime;
         private bool _IsHeartbeatPending;
@@ -170,47 +171,65 @@ namespace Cryptopia.Node.RTC
         /// <summary>
         /// Constructor
         /// </summary>
-        /// <param name="config"></param>
+        /// <param name="isPolite"></param>
+        /// <param name="isInitiatedByUs"></param>
         /// <param name="loggingService"></param>
         /// <param name="signallingService"></param>
-        public BaseChannel(IChannelConfig config, ILoggingService loggingService, ISignallingService signallingService)
+        public BaseChannel(
+            bool isPolite, 
+            bool isInitiatedByUs, 
+            ILoggingService loggingService, 
+            ISignallingService signallingService)
         {
+            IsPolite = isPolite;
+            IsInitiatedByUs = isInitiatedByUs;
             LoggingService = loggingService;
             SignallingService = signallingService;
+        }
 
-            IsPolite = config.Polite;
-            IsInitiatedByUs = config.InitiatedByUs;
+        #region "Methods"
 
-            if (config.HeartbeatInterval.HasValue)
-            {
-                HeartbeatInterval = config.HeartbeatInterval.Value;
-            }
-
-            if (config.MaxLatency.HasValue)
-            {
-                MaxLatency = config.MaxLatency.Value;
-            }
-
+        /// <summary>
+        /// Starts the peer connection with the specified ICE servers
+        /// </summary>
+        /// <param name="iceServers"></param>
+        /// <exception cref="InvalidOperationException"></exception>
+        public T StartPeerConnection(IICEServerConfig[]? iceServers = null)
+        {
+            // Configure peer connection
             var peerConfig = new RTCConfiguration();
-            var iceServers = new List<RTCIceServer>();
-            for (int i = 0; i < config.IceServers.Length; i++)
+            var iceServerList = new List<RTCIceServer>();
+            if (null != iceServers)
             {
-                iceServers.Add(new RTCIceServer()
+                for (int i = 0; i < iceServers.Length; i++)
                 {
-                    urls = config.IceServers[i].Urls,
-                });
+                    iceServerList.Add(new RTCIceServer()
+                    {
+                        urls = iceServers[i].Urls,
+                    });
+                }
             }
+            peerConfig.iceServers = iceServerList;
 
-            peerConfig.iceServers = iceServers;
+            lock (_Lock)
+            {
+                if (null != _PeerConnection)
+                {
+                    throw new InvalidOperationException("Peer connection already initialized");
+                }
 
-            _PeerConnection = new RTCPeerConnection(peerConfig);
+                // Create peer connection
+                _PeerConnection = new RTCPeerConnection(peerConfig);
+            }
+            
+            // Set up event handlers
             _PeerConnection.onicecandidate += OnOnIceCandidate;
             _PeerConnection.oniceconnectionstatechange += OnIceConnectionChange;
             _PeerConnection.ondatachannel += (channel) =>
             {
                 if (channel == null || string.IsNullOrEmpty(channel.label))
                 {
-                    loggingService.LogError("Received a data channel with no label");
+                    LoggingService.LogError("Received a data channel with no label");
                     return;
                 }
 
@@ -225,19 +244,68 @@ namespace Cryptopia.Node.RTC
                         break;
 
                     default:
-                        loggingService.LogError($"Received an unknown channel: {channel.label}");
+                        LoggingService.LogError($"Received an unknown channel: {channel.label}");
                         break;
                 }
             };
 
-            // Start heartbeat 
-            _HeartbeatTimer = new System.Timers.Timer(
-                Math.Min(HeartbeatInterval, HeartbeatTimeout));
-            _HeartbeatTimer.Elapsed += OnHeartbeatTimerElapsed;
-            _HeartbeatTimer.Start();
+            return (T)this;
         }
 
-        #region "Methods"
+        /// <summary>
+        /// Starts the heartbeat
+        /// </summary>
+        /// <param name="interval"></param>
+        /// <exception cref="InvalidOperationException"></exception>
+        public T StartHeartbeat(double? interval = null, double? timeout = null)
+        {
+            lock (_HeartbeatLock)
+            {
+                if (null != _HeartbeatTimer)
+                {
+                    throw new InvalidOperationException("Heartbeat already started");
+                }
+
+                // Start heartbeat 
+                if (interval.HasValue)
+                {
+                    HeartbeatInterval = interval.Value;
+                }
+
+                if (timeout.HasValue)
+                {
+                    HeartbeatTimeout = timeout.Value;
+                }
+
+                _HeartbeatTimer = new System.Timers.Timer(
+                    Math.Min(HeartbeatInterval, HeartbeatTimeout));
+                _HeartbeatTimer.Elapsed += OnHeartbeatTimerElapsed;
+                _HeartbeatTimer.Start();
+            }
+
+            return (T)this;
+        }
+
+        /// <summary>
+        /// Stops the heartbeat
+        /// </summary>
+        public void StopHeartbeat()
+        {
+            lock (_HeartbeatLock)
+            {
+                if (null != _HeartbeatTimer)
+                {
+                    _HeartbeatTimer.Stop();
+                    _HeartbeatTimer.Elapsed -= OnHeartbeatTimerElapsed;
+                    _HeartbeatTimer.Dispose();
+                    _HeartbeatTimer = null;
+                }
+                
+                HeartbeatInterval = 0; // Stopped  
+            }
+
+            Latency = 0; // No latency data available
+        }
 
         /// <summary>
         /// Connects to the signalling server
@@ -499,12 +567,21 @@ namespace Cryptopia.Node.RTC
             }
 
             // Reset 
-            _LastHeartbeatTime = DateTime.UtcNow;
-            _IsHeartbeatPending = true;
-            _isHeartbeatTimeout = false;
+            lock (_HeartbeatLock)
+            {
+                // Stopped?
+                if (null == _HeartbeatTimer)
+                {
+                    return;
+                }
+
+                _LastHeartbeatTime = DateTime.UtcNow;
+                _IsHeartbeatPending = true;
+                _isHeartbeatTimeout = false;
+            }
 
             // Ping
-            _CommandChannel.send(ChannelCommand.Ping.ToString());
+            _CommandChannel?.send(ChannelCommand.Ping.ToString());
         }
 
         /// <summary>
@@ -519,7 +596,7 @@ namespace Cryptopia.Node.RTC
             }
 
             // Pong
-            _CommandChannel.send(ChannelCommand.Pong.ToString());
+            _CommandChannel?.send(ChannelCommand.Pong.ToString());
         }
 
         /// <summary>
@@ -528,7 +605,17 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         private void ReceiveHeartbeatResponse()
         {
-            _IsHeartbeatPending = false;
+            lock (_HeartbeatLock)
+            {
+                if (!_IsHeartbeatPending)
+                {
+                    return;
+                }
+
+                _IsHeartbeatPending = false;
+            }
+
+            // Calculate latency
             Latency = (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds;
 
             // High latency?
@@ -784,13 +871,7 @@ namespace Cryptopia.Node.RTC
                     }
 
                     // Stop heartbeat
-                    if (_HeartbeatTimer != null)
-                    {
-                        _HeartbeatTimer.Stop();
-                        _HeartbeatTimer.Elapsed -= OnHeartbeatTimerElapsed;
-                        _HeartbeatTimer.Dispose();
-                        _HeartbeatTimer = null;
-                    }
+                    StopHeartbeat();
 
                     // Dispose managed resources
                     if (commandChannel != null)
@@ -1088,22 +1169,40 @@ namespace Cryptopia.Node.RTC
                 return;
             }
 
-            if (_IsHeartbeatPending)
+            var notifyHeartBeatTimeout = false;
+            var sendHeartbeat = false;
+
+            lock (_HeartbeatLock)
             {
-                // Heartbeat Timeout?
-                if (!_isHeartbeatTimeout && (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds > HeartbeatTimeout)
+                if (_IsHeartbeatPending)
                 {
-                    _isHeartbeatTimeout = true;
-                    OnHeartbeatTimeout();
+                    // Heartbeat Timeout?
+                    if (!_isHeartbeatTimeout && (DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds > HeartbeatTimeout)
+                    {
+                        _isHeartbeatTimeout = true;
+                        notifyHeartBeatTimeout = true;
+                    }
+                }
+                else
+                {
+                    // Heartbeat pending?
+                    if ((DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds >= HeartbeatInterval)
+                    {
+                        sendHeartbeat = true;
+                    }
                 }
             }
-            else
+            
+            // Notify timeout
+            if (notifyHeartBeatTimeout)
             {
-                // Heartbeat pending?
-                if ((DateTime.UtcNow - _LastHeartbeatTime).TotalMilliseconds >= HeartbeatInterval)
-                {
-                    SendHeartbeat();
-                }
+                OnHeartbeatTimeout();
+            }
+
+            // Send heartbeat
+            else if (sendHeartbeat)
+            {
+                SendHeartbeat();
             }
         }
 

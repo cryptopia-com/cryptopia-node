@@ -3,7 +3,7 @@
     /// <summary>
     /// A Channel from a node (us) to an account that is registered with 
     /// </summary>
-    public class AccountChannel : BaseChannel, IAccountChannel
+    public class AccountChannel : BaseChannel<AccountChannel>, IAccountChannel
     {
         /// <summary>
         /// The node account (us)
@@ -23,20 +23,22 @@
         /// <summary>
         /// Constructor
         /// </summary>
-        /// <param name="config"></param>
+        /// <param name="isPolite"></param>
+        /// <param name="isInitiatedByUs"></param>
         /// <param name="loggingService"></param>
         /// <param name="signallingService"></param>
         /// <param name="originSigner"></param>
         /// <param name="destinationSigner"></param>
         /// <param name="destinationAccount"></param>
         public AccountChannel(
-            IChannelConfig config, 
+            bool isPolite,
+            bool isInitiatedByUs,
             ILoggingService loggingService, 
             ISignallingService signallingService, 
             LocalAccount originSigner, 
             LocalAccount destinationSigner, 
             RegisteredAccount destinationAccount) 
-            : base(config, loggingService, signallingService)
+            : base(isPolite, isInitiatedByUs, loggingService, signallingService)
         {
             OriginSigner = originSigner;
             DestinationSigner = destinationSigner;
@@ -115,31 +117,6 @@
         /// <returns></returns>
         protected override void SendCandidate(IceCandidate candidate)
         {
-            if (null == SignallingService)
-            {
-                throw new ArgumentNullException($"Signalling is null; State: {State.ToString()}");
-            }
-
-            if (null == candidate)
-            {
-                throw new ArgumentNullException($"Candidate is null; State: {State.ToString()}");
-            }
-
-            if (null == DestinationAccount)
-            {
-                throw new ArgumentNullException($"Destination account is null; State: {State.ToString()}");
-            }
-
-            if (null == DestinationSigner)
-            {
-                throw new ArgumentNullException($"Destination signer is null; State: {State.ToString()}");
-            }
-
-            if (null == OriginSigner)
-            {
-                throw new ArgumentNullException($"Origin signer is null; State: {State.ToString()}");
-            }
-
             SignallingService.Send(new RTCMessageEnvelope()
             {
                 Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),

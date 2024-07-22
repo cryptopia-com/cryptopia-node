@@ -26,6 +26,21 @@
         bool IsInitiatedByUs { get; }
 
         /// <summary>
+        /// Heartbeat interval in milliseconds
+        /// 
+        /// The interval at which the channel will send ping messages to the 
+        /// remote peer in order to ensure the connection is still alive
+        /// </summary>
+        public double HeartbeatInterval { get; }
+
+        /// <summary>
+        /// Heartbeat timeout in milliseconds
+        /// 
+        /// The maximum timeout that the channel will tolerate before self-terminating
+        /// </summary>
+        public double HeartbeatTimeout { get; }
+
+        /// <summary>
         /// Max latency in milliseconds (zero means no latency)
         /// 
         /// The maximum latency that the channel will tolerate before self-terminating

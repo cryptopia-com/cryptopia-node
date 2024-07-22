@@ -1,5 +1,4 @@
-﻿using Spectre.Console;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 
 namespace Cryptopia.Node.RTC
 {
@@ -103,26 +102,24 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         /// <param name="account">Registered smart-contract address</param>
         /// <param name="signer">Signer</param></param>
+        /// <param name="signalling">Signalling server</param></param>
         /// <returns></returns>
         public IAccountChannel CreateChannel(string account, string signer, ISignallingService signalling)
         {
             var channel = new AccountChannel(
-                new ChannelConfig() 
-                { 
-                    Polite = true,
-                    IceServers =
-                    [
-                        new ICEServerConfig() 
-                        {
-                            Urls = "stun:stun.l.google.com:19302"
-                        }
-                    ]
-                },
+                true, // Polite
+                false, // Not initiated by us
                 new RTCLoggingService(),
                 signalling,
                 new LocalAccount("0x"),
                 new LocalAccount(signer),
-                new RegisteredAccount(account, "Unknown"));
+                new RegisteredAccount(account, "Unknown"))
+            .StartPeerConnection([
+                new ICEServerConfig()
+                {
+                    Urls = "stun:stun.l.google.com:19302"
+                }])
+            .StartHeartbeat();
 
             // Subscribe  to events
             channel.OnMessage += OnChannelMessage;
