@@ -28,4 +28,10 @@ jobs:
         SERVER_IP: ${{ secrets.DIGITALOCEAN_SERVER_IP }}
         APPLICATION_INSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATION_INSIGHTS_CONNECTION_STRING }}
       run: |
-        ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cd /root/cryptopia-node && git fetch origin && git checkout master && git pull origin master && docker-compose up -d --build"
+        ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
+          cd /root/cryptopia-node
+          git fetch origin
+          git checkout master
+          git pull origin master --rebase=false
+          docker-compose up -d --build
+        EOF
