@@ -1,5 +1,5 @@
 # Cryptopia Node Deployment
-
+Reload
 This guide provides instructions to deploy the Cryptopia Node on an Ubuntu server.
 
 ## Prerequisites
