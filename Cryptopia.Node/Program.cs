@@ -94,7 +94,9 @@ public class Program
 
             var telemetryClient = new TelemetryClient(configuration);
             var insightsLoggingService = new ApplicationInsightsLoggingService(telemetryClient);
-            
+
+            insightsLoggingService.LogInfo("Started with Application Insights logging service");
+
             // Use insights to log unhandled exceptions
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
             {
