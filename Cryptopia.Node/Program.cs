@@ -87,6 +87,7 @@ public class Program
     {
         // Are we using Application Insights?
         var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
+        Console.WriteLine(insightsConnectionString);
         if (!string.IsNullOrEmpty(insightsConnectionString))
         {
             var configuration = TelemetryConfiguration.CreateDefault();
