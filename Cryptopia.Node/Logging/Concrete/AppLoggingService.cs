@@ -1,9 +1,9 @@
-﻿namespace Cryptopia.Node.RTC
+﻿namespace Cryptopia.Node
 {
     /// <summary>
-    /// RTC logging service
+    /// Base logging service
     /// </summary>
-    public class RTCLoggingService : ILoggingService
+    public class AppLoggingService : ILoggingService
     {
         /// <summary>
         /// True if logging is enabled
@@ -20,13 +20,13 @@
         /// Logs a generic message
         /// </summary>
         /// <param name="message"></param>
-        public void Log(string message)
+        public virtual void Log(string message)
         {
             if (WriteToConsole)
             {
                 Console.WriteLine(message);
             }
-            
+
             OnLog?.Invoke(this, message);
         }
 
@@ -34,13 +34,13 @@
         /// Logs an informational message
         /// </summary>
         /// <param name="message"></param>
-        public void LogInfo(string message)
+        public virtual void LogInfo(string message)
         {
             if (WriteToConsole)
             {
                 Console.WriteLine($"Info: {message}");
             }
-            
+
             OnInfo?.Invoke(this, message);
         }
 
@@ -48,7 +48,7 @@
         /// Logs a warning message
         /// </summary>
         /// <param name="message"></param>
-        public void LogWarning(string message)
+        public virtual void LogWarning(string message)
         {
             if (WriteToConsole)
             {
@@ -62,7 +62,7 @@
         /// Logs an error message
         /// </summary>
         /// <param name="message"></param>
-        public void LogError(string message)
+        public virtual void LogError(string message)
         {
             if (WriteToConsole)
             {
@@ -70,6 +70,14 @@
             }
 
             OnError?.Invoke(this, message);
+        }
+
+        /// <summary>
+        /// Can be overridden to dispose of resources
+        /// </summary>
+        public virtual void Dispose()
+        {
+            // Nothing to dispose
         }
     }
 }

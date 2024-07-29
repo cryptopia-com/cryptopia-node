@@ -1,5 +1,8 @@
 ﻿using CommandLine;
+using Cryptopia.Node.ApplicationInsights;
 using Cryptopia.Node.RTC;
+using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.Extensibility;
 using Spectre.Console;
 using System.Reflection;
 using WebSocketSharp.Server;
@@ -31,6 +34,8 @@ public class Program
         [Option("all", HelpText = "List all channels")]
         public bool All { get; set; }
     }
+
+    private static TelemetryClient? _TelemetryClient;
 
     /// <summary>
     /// The application mode
@@ -80,6 +85,29 @@ public class Program
     /// <returns></returns>
     private static int Run(bool stream)
     {
+        // Are we using Application Insights?
+        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
+        if (!string.IsNullOrEmpty(insightsConnectionString))
+        {
+            var configuration = TelemetryConfiguration.CreateDefault();
+            configuration.ConnectionString = insightsConnectionString;
+
+            var telemetryClient = new TelemetryClient(configuration);
+            var insightsLoggingService = new ApplicationInsightsLoggingService(telemetryClient);
+            
+            // Use insights to log unhandled exceptions
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+            {
+                telemetryClient.TrackException(e.ExceptionObject as Exception);
+                telemetryClient.Flush();
+                Thread.Sleep(100);
+            };
+
+            // Use insights logging service
+            ChannelManager.Instance.LoggingService = insightsLoggingService;
+        }
+
+        // Listen for process exit
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
 
         // Setup WebSocket server

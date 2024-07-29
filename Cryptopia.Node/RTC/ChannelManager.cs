@@ -20,6 +20,27 @@ namespace Cryptopia.Node.RTC
     /// </summary>
     public class ChannelManager : Singleton<ChannelManager>, IDisposable
     {
+        /// <summary>
+        /// Logging service
+        /// </summary>
+        public ILoggingService LoggingService
+        { 
+            get
+            {
+                if (null == _LoggingService)
+                {
+                    _LoggingService = new AppLoggingService();
+                }
+
+                return _LoggingService;
+            }
+            set
+            {
+                _LoggingService = value;
+            }
+        }
+        private ILoggingService? _LoggingService;
+
         // Internal
         private bool _Disposed = false;
         private readonly object _DisposeLock = new object();
@@ -109,7 +130,7 @@ namespace Cryptopia.Node.RTC
             var channel = new AccountChannel(
                 true, // Polite
                 false, // Not initiated by us
-                new RTCLoggingService(),
+                LoggingService,
                 signalling,
                 new LocalAccount("0x"),
                 new LocalAccount(signer),
@@ -242,6 +263,7 @@ namespace Cryptopia.Node.RTC
 
                 if (disposing)
                 {
+                    // Dispose all channels
                     foreach (var accountChannels in _Channels.Values)
                     {
                         foreach (var channel in accountChannels.Values)
@@ -258,6 +280,12 @@ namespace Cryptopia.Node.RTC
                         }
                     }
                     _Channels.Clear();
+
+                    // Dispose the logging service
+                    if (null != _LoggingService)
+                    {
+                        _LoggingService.Dispose();
+                    }
                 }
 
                 _Disposed = true;
