@@ -466,7 +466,7 @@ public class Program
     {
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
         var channelCount = ChannelManager.Instance.GetChannelCount();
-        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING") ?? "";
+        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
 
         var table = new Table();
         table.AddColumn("Info");
@@ -474,7 +474,7 @@ public class Program
 
         table.AddRow("WebSocket server port", port);
         table.AddRow("Connected accounts", channelCount.ToString());
-        table.AddRow("Insights connection string", insightsConnectionString);
+        table.AddRow("Insights connection string", insightsConnectionString == null ? "NOT_FOUND" : insightsConnectionString);
 
         AnsiConsole.Write(table);
 
