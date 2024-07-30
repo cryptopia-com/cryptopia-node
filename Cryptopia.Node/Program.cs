@@ -474,7 +474,7 @@ public class Program
 
         table.AddRow("WebSocket server port", port);
         table.AddRow("Connected accounts", channelCount.ToString());
-        table.AddRow("APPLICATION_INSIGHTS_CONNECTION_STRING", insightsConnectionString);
+        table.AddRow("Insights connection string", insightsConnectionString);
 
         AnsiConsole.Write(table);
 
