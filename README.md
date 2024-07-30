@@ -11,7 +11,7 @@ This guide provides instructions to deploy the Cryptopia Node on an Ubuntu serve
   - 3478 (STUN/TURN TCP traffic)
   - 5349 (TURN over TLS)
   - 3033 (ICE server)
-  - 59000-65000 (TURN/STUN server for WebRTC)
+  - 59000-65000 (TURN/STUN server for WebRTC) 
 
 ## Steps to Deploy
 
