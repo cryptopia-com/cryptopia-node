@@ -35,8 +35,6 @@ public class Program
         public bool All { get; set; }
     }
 
-    private static TelemetryClient? _TelemetryClient;
-
     /// <summary>
     /// The application mode
     /// </summary>
@@ -52,10 +50,18 @@ public class Program
     public static Mode CurrentMode { get; private set; }
 
     // Internal
+    private static WebSocketServer? _Server;
+    private static TelemetryClient? _TelemetryClient;
     private static Task? _StreamingTask;
     private static Task? _ListeningTask;
     private static CancellationTokenSource? _StreamingCTS;
     private static CancellationTokenSource? _ListeningCTS;
+    private static CancellationTokenSource _ApplicationCTS = new CancellationTokenSource();
+
+    private static string? _Input = null;
+    private static bool _InputProcessing = false;
+    private static bool _InputAvailable = false;
+    private static readonly object _InputLock = new object();
 
     /// <summary>
     /// Entry point 
@@ -76,6 +82,9 @@ public class Program
             .MapResult(
                 (RunOptions opts) => Run(opts.Stream),
                 errs => HandleParseError(errs));
+
+        // Keep the main thread running until cancellation is requested
+        _ApplicationCTS.Token.WaitHandle.WaitOne();
     }
 
     /// <summary>
@@ -87,25 +96,24 @@ public class Program
     {
         // Are we using Application Insights?
         var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
-        Console.WriteLine(insightsConnectionString);
         if (!string.IsNullOrEmpty(insightsConnectionString))
         {
             var configuration = TelemetryConfiguration.CreateDefault();
             configuration.ConnectionString = insightsConnectionString;
 
-            var telemetryClient = new TelemetryClient(configuration);
-            var insightsLoggingService = new ApplicationInsightsLoggingService(telemetryClient);
+            _TelemetryClient = new TelemetryClient(configuration);
+            var insightsLoggingService = new ApplicationInsightsLoggingService(_TelemetryClient);
 
             insightsLoggingService.LogInfo("Started with Application Insights");
-            telemetryClient.Flush();
-            Thread.Sleep(100);
+            _TelemetryClient.Flush();
+            Thread.Sleep(50);
 
             // Use insights to log unhandled exceptions
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
             {
-                telemetryClient.TrackException(e.ExceptionObject as Exception);
-                telemetryClient.Flush();
-                Thread.Sleep(100);
+                _TelemetryClient.TrackException(e.ExceptionObject as Exception);
+                _TelemetryClient.Flush();
+                Thread.Sleep(50);
             };
 
             // Use insights logging service
@@ -117,15 +125,33 @@ public class Program
 
         // Setup WebSocket server
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
-        var server = new WebSocketServer($"ws://0.0.0.0:{port}");
-        server.AddWebSocketService<RTCSignallingBehavior>("/");
-        server.Start();
+        _Server = new WebSocketServer($"ws://0.0.0.0:{port}");
+        _Server.AddWebSocketService<RTCSignallingBehavior>("/");
+        _Server.Start();
+
+        Task.Run(() => ProcessInput(_ApplicationCTS.Token));
 
         // Set initial mode
         SetMode(stream ? Mode.Stream : Mode.Listen);
 
-        // Cancel token on Ctrl+C
+        // Cancel Ctrl+C
         Console.CancelKeyPress += (sender, e) =>
+        {
+            HandleCancelKeyPress(e);
+        };
+
+        return 0;
+    }
+
+    
+
+    /// <summary>
+    /// Called when the cancel key is pressed
+    /// </summary>
+    /// <param name="e"></param>
+    private static void HandleCancelKeyPress(ConsoleCancelEventArgs e)
+    {
+        try
         {
             // Disable streaming if it is enabled
             if (Mode.Stream == CurrentMode)
@@ -135,14 +161,29 @@ public class Program
                 return;
             }
 
-            server.Stop();
+            _Server?.Stop();
             StopListening();
             StopStreaming();
-            e.Cancel = false;
-        };
+        }
+        catch (Exception ex)
+        {
+            _TelemetryClient?.TrackException(ex);
+            throw;
+        }
+        finally
+        {
+            if (!e.Cancel)
+            {
+                _ApplicationCTS.Cancel();
+                lock (_InputLock)
+                {
+                    // Notify all waiting threads to exit
+                    Monitor.PulseAll(_InputLock); 
+                }
+            }
+        }
 
-        Thread.Sleep(Timeout.Infinite);
-        return 0;
+        e.Cancel = false;
     }
 
     /// <summary>
@@ -271,9 +312,7 @@ public class Program
     private static void StartListening()
     {
         _ListeningCTS = new CancellationTokenSource();
-        //_ListeningTask = Task.Run(() => Listen(_ListeningCTS.Token));
-
-        Listen(_ListeningCTS.Token);
+        _ListeningTask = Task.Run(() => Listen(_ListeningCTS.Token), _ListeningCTS.Token); 
     }
 
     /// <summary>
@@ -282,6 +321,12 @@ public class Program
     private static void StopListening()
     {
         _ListeningCTS?.Cancel();
+        lock (_InputLock)
+        {
+            // Signal task cancellation
+            Monitor.PulseAll(_InputLock);
+        }
+
         _ListeningTask?.Wait();
         _ListeningCTS?.Dispose();
         _ListeningCTS = null;
@@ -295,22 +340,110 @@ public class Program
     {
         while (!token.IsCancellationRequested)
         {
-            Console.Write("> ");
-            string input = Console.ReadLine();
-
-            if (string.IsNullOrEmpty(input))
+            lock (_InputLock)
             {
-                continue;
+                // Wait for the input to be processed
+                while ((_InputProcessing || _InputAvailable) && !token.IsCancellationRequested)
+                {
+                    Monitor.Wait(_InputLock);
+                }
+
+                // Check if the task was cancelled
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                Console.Write("> ");
+                var inputTask = Task.Run(() => Console.ReadLine(), token);
+
+                try
+                {
+                    inputTask.Wait(token);
+                    var input = inputTask.Result;
+
+                    if (!string.IsNullOrEmpty(input))
+                    {
+                        _Input = input;
+                        _InputAvailable = true;
+
+                        // Signal input available
+                        Monitor.PulseAll(_InputLock);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Handle the task cancellation gracefully
+                }
+                finally
+                {
+                    // Ensure Monitor.PulseAll is called in case of an exception
+                    if (!_InputAvailable)
+                    {
+                        Monitor.PulseAll(_InputLock);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void ProcessInput(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            string? inputToProcess = null;
+
+            lock (_InputLock)
+            {
+                // Wait for input to be available
+                while (!_InputAvailable || _InputProcessing)
+                {
+                    Monitor.Wait(_InputLock);
+                }
+
+                if (!string.IsNullOrEmpty(_Input))
+                {
+                    inputToProcess = _Input;
+
+                    // Reset the input
+                    _Input = null;
+                    _InputAvailable = false;
+
+                    // Signal input processing
+                    _InputProcessing = true;
+                    Monitor.PulseAll(_InputLock);
+                }
+
+                else
+                {
+                    // Reset the input state if it's empty
+                    _InputAvailable = false;
+                    _InputProcessing = false;
+
+                    // Signal nothing to process
+                    Monitor.PulseAll(_InputLock);
+                }
             }
 
-            var args = input.Split(' ');
-            Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions>(args)
-                .MapResult(
-                    (VersionOptions opts) => RunVersionCommand(),
-                    (StatusOptions opts) => RunStatusCommand(),
-                    (StreamOptions opts) => RunStreamCommand(),
-                    (ListOptions opts) => RunListCommand(opts.All),
-                    errs => HandleParseError(errs));
+            if (inputToProcess != null)
+            {
+                // Execute the command (outside the lock to avoid holding the lock for long periods)
+                var args = inputToProcess.Split(' ');
+                Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions>(args)
+                    .MapResult(
+                        (VersionOptions opts) => RunVersionCommand(),
+                        (StatusOptions opts) => RunStatusCommand(),
+                        (StreamOptions opts) => RunStreamCommand(),
+                        (ListOptions opts) => RunListCommand(opts.All),
+                        errs => HandleParseError(errs));
+
+                lock (_InputLock)
+                {
+                    // Signal input processed
+                    _InputProcessing = false;
+                    Monitor.PulseAll(_InputLock);
+                }
+            }
         }
     }
 
@@ -333,6 +466,7 @@ public class Program
     {
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
         var channelCount = ChannelManager.Instance.GetChannelCount();
+        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING") ?? "";
 
         var table = new Table();
         table.AddColumn("Info");
@@ -340,6 +474,7 @@ public class Program
 
         table.AddRow("WebSocket server port", port);
         table.AddRow("Connected accounts", channelCount.ToString());
+        table.AddRow("APPLICATION_INSIGHTS_CONNECTION_STRING", insightsConnectionString);
 
         AnsiConsole.Write(table);
 
@@ -413,5 +548,7 @@ public class Program
     static void OnProcessExit(object? sender, EventArgs e)
     {
         ChannelManager.Instance.Dispose();
+        _TelemetryClient?.Flush();
+        Thread.Sleep(1000); 
     }
 }

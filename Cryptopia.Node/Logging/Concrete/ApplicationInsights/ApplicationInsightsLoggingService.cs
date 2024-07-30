@@ -66,15 +66,5 @@ namespace Cryptopia.Node.ApplicationInsights
 
             _TelemetryClient.TrackTrace(message, SeverityLevel.Error);
         }
-
-        /// <summary>
-        /// Disposes of the telemetry client
-        /// </summary>
-        public override void Dispose()
-        {
-            _TelemetryClient.Flush();
-            Thread.Sleep(1000);
-            base.Dispose();
-        }
     }
 }
