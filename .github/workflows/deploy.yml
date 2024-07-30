@@ -34,6 +34,7 @@ jobs:
           echo "PUBLIC_IP=0.0.0.0" >> .env
           git fetch origin
           git checkout master
-          git pull origin master --rebase=false
+          git rebase origin/master
+          git pull origin master
           docker-compose up -d --build
         EOF
