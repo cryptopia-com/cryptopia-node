@@ -42,7 +42,13 @@ jobs:
           git pull origin master
           docker-compose up -d --build
         EOF
-    - name: Debug Secrets Length
+    - name: Debug Secrets 1
       run: |
-        echo $APPLICATION_INSIGHTS_CONNECTION_STRING
+        echo "APPLICATION_INSIGHTS_CONNECTION_STRING: $APPLICATION_INSIGHTS_CONNECTION_STRING"
+    - name: Debug Secrets 2
+      run: |
+        echo "APPLICATION_INSIGHTS_CONNECTION_STRING: $env:APPLICATION_INSIGHTS_CONNECTION_STRING"
+    - name: Debug Secrets 3
+      run: |
+        echo "APPLICATION_INSIGHTS_CONNECTION_STRING: %APPLICATION_INSIGHTS_CONNECTION_STRING%"
 
