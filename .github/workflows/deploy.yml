@@ -30,10 +30,15 @@ jobs:
         SERVER_IP: ${{ secrets.DIGITALOCEAN_SERVER_IP }}
         APPLICATION_INSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATION_INSIGHTS_CONNECTION_STRING }}
       run: |
+        echo "Setting environment variables..."
+        echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}"
+        echo "SERVER_IP=${SERVER_IP}"
+        
         ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
           export APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}
           export PUBLIC_IP=${SERVER_IP}
           cd /root/cryptopia-node
+          rm -f .env
           echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" > .env
           echo "PUBLIC_IP=${SERVER_IP}" >> .env
           echo "Contents of .env file:"
