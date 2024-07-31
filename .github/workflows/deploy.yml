@@ -32,7 +32,7 @@ jobs:
       run: |
         ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
           cd /root/cryptopia-node
-          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=$APPLICATION_INSIGHTS_CONNECTION_STRING" > .env
+          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" > .env
           echo "PUBLIC_IP=0.0.0.0" >> .env
           echo "Contents of .env file:"
           cat .env
@@ -42,7 +42,3 @@ jobs:
           git pull origin master
           docker-compose up -d --build
         EOF
-
-    - name: Check Secrets Length
-      run: |
-        echo "APPLICATION_INSIGHTS_CONNECTION_STRING length: ${#APPLICATION_INSIGHTS_CONNECTION_STRING}"
