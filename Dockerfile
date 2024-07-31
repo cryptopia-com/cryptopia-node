@@ -20,8 +20,11 @@ RUN apt-get update && apt-get install -y iputils-ping && rm -rf /var/lib/apt/lis
 # Copy the built application from the build stage
 COPY --from=build /app .
 
-# Print environment variables for debugging
-RUN printenv
+# Define environment variables
+ARG APPLICATION_INSIGHTS_CONNECTION_STRING
+ARG PUBLIC_IP
+ENV APPLICATION_INSIGHTS_CONNECTION_STRING=$APPLICATION_INSIGHTS_CONNECTION_STRING
+ENV PUBLIC_IP=$PUBLIC_IP
 
 # Define the entry point for the container
 ENTRYPOINT ["dotnet", "Cryptopia.Node.dll"]
