@@ -30,8 +30,13 @@ jobs:
         SERVER_IP: ${{ secrets.DIGITALOCEAN_SERVER_IP }}
         APPLICATION_INSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATION_INSIGHTS_CONNECTION_STRING }}
       run: |
-        ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
+        echo "APPLICATION_INSIGHTS_CONNECTION_STRING before SSH: ${APPLICATION_INSIGHTS_CONNECTION_STRING}"
+        ssh -o StrictHostKeyChecking=no root@$SERVER_IP << EOF
           cd /root/cryptopia-node
+          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" > .env
+          echo "PUBLIC_IP=${SERVER_IP}" >> .env
+          echo "Contents of .env file:"
+          cat .env
           git fetch origin
           git checkout master
           git rebase origin/master
