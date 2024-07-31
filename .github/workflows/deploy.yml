@@ -33,7 +33,7 @@ jobs:
         ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
           cd /root/cryptopia-node
           echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" > .env
-          echo "PUBLIC_IP=0.0.0.0" >> .env
+          echo "PUBLIC_IP=${SERVER_IP}" >> .env
           echo "Contents of .env file:"
           cat .env
           git fetch origin
