@@ -5,8 +5,10 @@ services:
       context: .
       dockerfile: Dockerfile
     network_mode: "host"
+    env_file:
+      - .env
     environment:
-      PUBLIC_IP: ${PUBLIC_IP}
-      APPLICATION_INSIGHTS_CONNECTION_STRING: $APPLICATION_INSIGHTS_CONNECTION_STRING
+      - PUBLIC_IP
+      - APPLICATION_INSIGHTS_CONNECTION_STRING
     stdin_open: true
     tty: true
