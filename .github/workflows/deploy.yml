@@ -31,10 +31,11 @@ jobs:
         APPLICATION_INSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATION_INSIGHTS_CONNECTION_STRING }}
       run: |
         echo "APPLICATION_INSIGHTS_CONNECTION_STRING before SSH: ${APPLICATION_INSIGHTS_CONNECTION_STRING}"
-        ssh -o StrictHostKeyChecking=no root@$SERVER_IP << EOF
+        ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
+          echo "APPLICATION_INSIGHTS_CONNECTION_STRING before setting: $APPLICATION_INSIGHTS_CONNECTION_STRING"
           cd /root/cryptopia-node
-          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" > .env
-          echo "PUBLIC_IP=${SERVER_IP}" >> .env
+          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=$APPLICATION_INSIGHTS_CONNECTION_STRING" > .env
+          echo "PUBLIC_IP=$SERVER_IP" >> .env
           echo "Contents of .env file:"
           cat .env
           git fetch origin
