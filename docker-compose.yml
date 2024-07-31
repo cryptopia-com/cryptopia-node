@@ -7,6 +7,6 @@ services:
     network_mode: "host"
     environment:
       - PUBLIC_IP=${SERVER_IP}
-      - APPLICATION_INSIGHTS_CONNECTION_STRING=true
+      - APPLICATION_INSIGHTS_CONNECTION_STRING="Test"
     stdin_open: true
     tty: true
