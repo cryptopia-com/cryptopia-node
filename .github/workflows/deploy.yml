@@ -44,5 +44,5 @@ jobs:
         EOF
     - name: Debug Secrets Length
       run: |
-        echo ${APPLICATION_INSIGHTS_CONNECTION_STRING}
+        echo $APPLICATION_INSIGHTS_CONNECTION_STRING
 
