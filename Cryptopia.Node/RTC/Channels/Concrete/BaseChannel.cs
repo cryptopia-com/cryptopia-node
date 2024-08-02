@@ -34,7 +34,7 @@ namespace Cryptopia.Node.RTC
 
                 if (shouldNotify)
                 {
-                    OnStable();
+                    OnStableDetected();
                 }
             }
         }
@@ -108,6 +108,13 @@ namespace Cryptopia.Node.RTC
         /// The maximum timeout that the channel will tolerate before self-terminating
         /// </summary>
         public double HeartbeatTimeout { get; private set; } = 1000;
+
+        /// <summary>
+        /// Max signalling timeout in milliseconds 
+        /// 
+        /// After this duration, the channel will consider the connection as timed out
+        /// </summary>
+        public double MaxSignallingTimeout { get; set; } = 10000;
 
         /// <summary>
         /// Max latency in milliseconds (zero means no latency)
@@ -187,6 +194,7 @@ namespace Cryptopia.Node.RTC
         private RTCDataChannel? _DataChannel;
         private RTCDataChannel? _CommandChannel;
         private RTCPeerConnection? _PeerConnection;
+        private CancellableDelay _SignallingTimer;
 
         // Heartbeat
         private readonly object _HeartbeatLock = new object();
@@ -201,6 +209,7 @@ namespace Cryptopia.Node.RTC
 
         // Events
         public event EventHandler? OnOpen;
+        public event EventHandler? OnStable;
         public event EventHandler<ChannelState>? OnStateChange;
         public event EventHandler<RTCMessageEnvelope>? OnMessage;
         public event EventHandler<double>? OnLatency;
@@ -225,6 +234,9 @@ namespace Cryptopia.Node.RTC
             IsInitiatedByUs = isInitiatedByUs;
             LoggingService = loggingService;
             SignallingService = signallingService;
+            _SignallingTimer = new CancellableDelay(
+                TimeSpan.FromMilliseconds(MaxSignallingTimeout));
+            _SignallingTimer.OnTimeout += OnSignallingTimeoutDetected;
         }
 
         #region "Methods"
@@ -255,7 +267,9 @@ namespace Cryptopia.Node.RTC
             {
                 if (null != _PeerConnection)
                 {
-                    throw new InvalidOperationException("Peer connection already initialized");
+                    var exception = new InvalidOperationException("Peer connection already initialized");
+                    LoggingService?.LogException(exception);
+                    throw exception;
                 }
 
                 // Create peer connection
@@ -301,14 +315,18 @@ namespace Cryptopia.Node.RTC
         {
             if (null == _PeerConnection)
             {
-                throw new InvalidOperationException("Peer connection not initialized");
+                var exception = new InvalidOperationException("Peer connection not initialized");
+                LoggingService?.LogException(exception);
+                throw exception;
             }
 
             lock (_HeartbeatLock)
             {
                 if (null != _HeartbeatTimer)
                 {
-                    throw new InvalidOperationException("Heartbeat already started");
+                    var exception = new InvalidOperationException("Heartbeat already started");
+                    LoggingService?.LogException(exception);
+                    throw exception;
                 }
 
                 // Start heartbeat 
@@ -383,8 +401,8 @@ namespace Cryptopia.Node.RTC
             {
                 SignallingService.Connect();
 
-                // Set the timeout duration (in seconds)
-                var timeout = DateTime.Now + TimeSpan.FromSeconds(10); // TODO: From config
+                // Set the timeout duration for connecting (half of signalling time)
+                var timeout = DateTime.Now + TimeSpan.FromMilliseconds(MaxSignallingTimeout * 0.5f);
                 while (!SignallingService.IsOpen && DateTime.Now < timeout)
                 {
                     await Task.Delay(100);
@@ -392,10 +410,39 @@ namespace Cryptopia.Node.RTC
 
                 if (!SignallingService.IsOpen)
                 {
-                    State = ChannelState.Failed;
-                    var exception = new InvalidOperationException("Connection timeout");
-                    LoggingService.LogError(exception.Message);
-                    throw exception;
+                    // Indicate signalling started
+                    bool shouldNotifyChange;
+                    bool shouldNotifyTimeout = false;
+                    lock (_ChannelLock)
+                    {
+                        if (_State != ChannelState.Connecting)
+                        {
+                            return;
+                        }
+
+                        SetState(
+                            ChannelState.Failed,
+                            out shouldNotifyChange,
+                            out bool shouldNotifyOpen);
+
+                        if (_SignallingTimer.IsStarted && !_SignallingTimer.IsExpired)
+                        {
+                            _SignallingTimer.Cancel(true); // Silent because we're in a lock
+                            shouldNotifyTimeout = true;
+                        }
+                    }
+
+                    // Notify change
+                    if (shouldNotifyChange)
+                    {
+                        OnStateChange?.Invoke(this, ChannelState.Failed);
+                    }
+
+                    // Notify timeout
+                    if (shouldNotifyTimeout)
+                    {
+                        OnTimeout?.Invoke(this, new EventArgs());
+                    }
                 }
             }
         }
@@ -435,6 +482,24 @@ namespace Cryptopia.Node.RTC
                 throw exception;
             }
 
+            bool signallingTimerAlreadyStarted = false;
+            lock (_ChannelLock)
+            {
+                signallingTimerAlreadyStarted = _SignallingTimer.IsStarted || _SignallingTimer.IsCancelled;
+                if (!signallingTimerAlreadyStarted)
+                {
+                    // Start signalling timer
+                    _SignallingTimer.Start();
+                }
+            }
+
+            if (signallingTimerAlreadyStarted)
+            {
+                var exception = new InvalidOperationException("Signalling timer already started");
+                LoggingService?.LogException(exception);
+                throw exception;
+            }
+
             // Connect to signalling server
             await ConnectAsync();
 
@@ -442,10 +507,18 @@ namespace Cryptopia.Node.RTC
             bool shouldNotifyChange;
             lock (_ChannelLock)
             {
+                if (_State == ChannelState.Closing ||
+                    _State == ChannelState.Disposing ||
+                    _State == ChannelState.Disposed)
+                {
+                    return;
+                }
+
                 if (_State != ChannelState.Connecting)
                 {
-                    LoggingService?.LogWarning($"Expected {ChannelState.Connecting} state instead of {_State} state");
-                    return;
+                    var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                    LoggingService?.LogException(exception);
+                    throw exception;
                 }
 
                 SetState(
@@ -486,7 +559,7 @@ namespace Cryptopia.Node.RTC
             {
                 var exception = new InvalidOperationException("Channel not in signalling state");
                 LoggingService?.LogException(exception);
-                return;
+                throw exception;
             }
 
             // Send answer
@@ -847,6 +920,12 @@ namespace Cryptopia.Node.RTC
                         return;
                     }
 
+                    // Cancel the signalling timer
+                    if (_SignallingTimer.IsStarted && !_SignallingTimer.IsExpired && !_SignallingTimer.IsCancelled)
+                    {
+                        _SignallingTimer.Cancel(true); // Silent because we're in a lock
+                    }
+
                     SetState(
                         ChannelState.Open,
                         out shouldNotifyChange,
@@ -1097,13 +1176,46 @@ namespace Cryptopia.Node.RTC
         /// 
         /// Stability indicates that the command channel is open and the ICE connection is established
         /// </summary>
-        protected virtual void OnStable()
+        protected virtual void OnStableDetected()
         {
-            if (State == ChannelState.Open)
+            bool shouldNotifyChange, shouldNotifyOpen;
+            lock (_ChannelLock)
             {
-                return;
+                if (_State == ChannelState.Closing ||
+                    _State == ChannelState.Disposing ||
+                    _State == ChannelState.Disposed || 
+                    _State == ChannelState.Failed ||
+                    _State == ChannelState.Open)
+                {
+                    return;
+                }
+
+                // Cancel the signalling timer
+                if (_SignallingTimer.IsStarted && !_SignallingTimer.IsExpired && !_SignallingTimer.IsCancelled)
+                {
+                    _SignallingTimer.Cancel(true); // Silent because we're in a lock
+                }
+
+                SetState(
+                    ChannelState.Open,
+                    out shouldNotifyChange,
+                    out shouldNotifyOpen);
             }
-            State = ChannelState.Open;
+
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnStateChange?.Invoke(this, ChannelState.Open);
+            }
+
+            // Notify open
+            if (shouldNotifyOpen)
+            {
+                OnOpen?.Invoke(this, new EventArgs());
+            }
+
+            // Notify
+            OnStable?.Invoke(this, EventArgs.Empty);
 
             // Close signalling
             if (SignallingService.IsOpen)
@@ -1263,6 +1375,40 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Called when the signalling timer was allowed to exprire
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void OnSignallingTimeoutDetected(object? sender, EventArgs e)
+        {
+            // Mark as failed
+            bool shouldNotifyChange = false;
+            lock (_ChannelLock)
+            {
+                // Set by other thread?
+                if (_State != ChannelState.Connecting && 
+                    _State != ChannelState.Signalling)
+                {
+                    return;
+                }
+
+                SetState(
+                    ChannelState.Failed,
+                    out shouldNotifyChange,
+                    out bool shouldNotifyOpen);
+            }
+
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnStateChange?.Invoke(this, ChannelState.Failed);
+            }
+
+            // Notify timeout
+            OnTimeout?.Invoke(this, new EventArgs());
+        }
+
+        /// <summary>
         /// Called when the heartbeat timer elapses
         /// </summary>
         /// <param name="sender"></param>
@@ -1301,7 +1447,7 @@ namespace Cryptopia.Node.RTC
             // Notify timeout
             if (notifyHeartBeatTimeout)
             {
-                OnHeartbeatTimeout();
+                OnHeartbeatTimeoutDetected();
             }
 
             // Send heartbeat
@@ -1314,7 +1460,7 @@ namespace Cryptopia.Node.RTC
         /// <summary>
         /// Called when the heartbeat times out
         /// </summary>
-        protected virtual void OnHeartbeatTimeout()
+        protected virtual void OnHeartbeatTimeoutDetected()
         {
             OnTimeout?.Invoke(this, EventArgs.Empty);
         }

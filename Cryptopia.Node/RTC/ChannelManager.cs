@@ -123,14 +123,14 @@ namespace Cryptopia.Node.RTC
                 new ICEServerConfig()
                 {
                     Urls = "stun:stun.l.google.com:19302"
-                }])
-            .StartHeartbeat();
+                }]);
 
             // Subscribe  to events
             channel.OnMessage += OnChannelMessage;
+            channel.OnStable += (sender, args) => channel.StartHeartbeat();
             channel.OnTimeout += (sender, args) => RemoveChannel(account, signer, true);
             channel.OnDispose += (sender, args) => RemoveChannel(account, signer, false);
-
+            
             // Store in memory
             if (!_Channels.ContainsKey(account))
             {

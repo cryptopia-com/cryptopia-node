@@ -68,13 +68,20 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
             var message = e.Data.DeserializeRTCMessage();
             if (null == message || null == message.Payload)
             {
-                throw new ArgumentException("Missing payload");
+                var exception = new ArgumentException("Missing payload");
+                LoggingService?.LogException(exception, new Dictionary<string, string>
+                {
+                    { "data", e.Data }
+                });
+
+                throw exception;
             }
 
             if (message.Payload.Type == RTCMessageType.Offer)
             {
                 HandleOfferMessage(message);
             }
+
             else
             { 
                 OnReceiveMessage?.Invoke(this, message);
@@ -92,13 +99,25 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
 
         if (null == offer)
         {
-            Console.WriteLine("(!) Offer cannot be empty");
+            LoggingService?.LogError(
+                "Offer cannot be empty", 
+                new Dictionary<string, string>
+                {
+                    { "node", message.Receiver.Account },
+                    { "account", message.Sender.Account },
+                    { "signer", message.Sender.Signer }
+                });
             return;
         }
 
         if (message.Sender.Account == null || message.Sender.Signer == null)
         {
-            Console.WriteLine("(!) Sender account or signer cannot be empty");
+            LoggingService?.LogError(
+                "Sender account or signer cannot be empty", 
+                new Dictionary<string, string>
+                {
+                    { "node", message.Receiver.Account }
+                });
             return;
         }
 

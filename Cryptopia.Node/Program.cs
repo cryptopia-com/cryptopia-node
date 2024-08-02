@@ -117,9 +117,6 @@ public class Program
                 _TelemetryClient.Flush();
                 Thread.Sleep(50);
             };
-
-            // Use insights logging service
-            ChannelManager.Instance.LoggingService = loggingService;
         }
 
         // Use the default logging service
@@ -130,6 +127,9 @@ public class Program
 
         // Listen for process exit
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+
+        // Setup channel manager
+        ChannelManager.Instance.LoggingService = loggingService;
 
         // Setup WebSocket server
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";

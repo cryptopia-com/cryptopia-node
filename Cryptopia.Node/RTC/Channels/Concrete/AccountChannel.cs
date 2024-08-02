@@ -177,9 +177,9 @@
         /// <summary>
         /// Called when the heartbeat times out
         /// </summary>
-        protected override void OnHeartbeatTimeout()
+        protected override void OnHeartbeatTimeoutDetected()
         {
-            base.OnHeartbeatTimeout();
+            base.OnHeartbeatTimeoutDetected();
 
             // Log the timeout
             LoggingService?.LogError("Heartbeat timeout", new Dictionary<string, string>
