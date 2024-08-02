@@ -33,7 +33,7 @@
         public AccountChannel(
             bool isPolite,
             bool isInitiatedByUs,
-            ILoggingService loggingService, 
+            ILoggingService? loggingService, 
             ISignallingService signallingService, 
             LocalAccount originSigner, 
             LocalAccount destinationSigner, 
@@ -172,6 +172,40 @@
         protected override void OnReceiveMessage(RTCMessageEnvelope envelope)
         { 
            // Nothing to do here
+        }
+
+        /// <summary>
+        /// Called when the heartbeat times out
+        /// </summary>
+        protected override void OnHeartbeatTimeout()
+        {
+            base.OnHeartbeatTimeout();
+
+            // Log the timeout
+            LoggingService?.LogError("Heartbeat timeout", new Dictionary<string, string>
+            {
+                { "node", OriginSigner.Address },
+                { "account", DestinationAccount.Address },
+                { "signer", DestinationSigner.Address }
+            });
+        }
+
+        /// <summary>
+        /// Called when high latency is detected
+        /// </summary>
+        /// <param name="latency"></param>
+        protected override void OnHighLatencyDetected(double latency)
+        {
+            base.OnHighLatencyDetected(latency);
+
+            // Log the high latency
+            LoggingService?.LogWarning("High latency detected", new Dictionary<string, string>
+            {
+                { "node", OriginSigner.Address },
+                { "account", DestinationAccount.Address },
+                { "signer", DestinationSigner.Address },
+                { "latency", latency.ToString() }
+            });
         }
     }
 }

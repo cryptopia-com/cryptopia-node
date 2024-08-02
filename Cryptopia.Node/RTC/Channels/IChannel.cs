@@ -77,7 +77,7 @@
         /// <summary>
         /// Occurs when the channel has high latency
         /// </summary>
-        event EventHandler OnHighLatency;
+        event EventHandler<double> OnHighLatency;
 
         /// <summary>
         /// Occurs when the channel encounters a timeout

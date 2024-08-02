@@ -1,6 +1,7 @@
 ﻿using Cryptopia.Node.RTC;
 using WebSocketSharp.Server;
 using WebSocketSharp;
+using Cryptopia.Node;
 
 /// <summary>
 /// RTCSignallingBehavior - Responsible for handling WebSocket connections and RTC signaling messages.
@@ -15,9 +16,21 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
     /// </summary>
     public bool IsOpen => State == WebSocketState.Open;
 
+    // Internal
+    public ILoggingService? LoggingService { get; private set;}
+
     // Events
     public new event EventHandler? OnOpen;
     public event EventHandler<RTCMessageEnvelope>? OnReceiveMessage;
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="loggingService"></param>
+    public RTCSignallingBehavior(ILoggingService? loggingService = null)
+    {
+        LoggingService = loggingService;
+    }
 
     /// <summary>
     /// Connects the signaling service 

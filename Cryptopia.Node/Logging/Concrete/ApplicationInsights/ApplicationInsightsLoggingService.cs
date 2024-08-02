@@ -27,9 +27,10 @@ namespace Cryptopia.Node.ApplicationInsights
         /// Logs a generic message
         /// </summary>
         /// <param name="message"></param>
-        public override void Log(string message)
+        /// <param name="properties"></param>
+        public override void Log(string message, IDictionary<string, string>? properties)
         {
-            base.Log(message);
+            base.Log(message, properties);
 
             _TelemetryClient.TrackTrace(message);
         }
@@ -38,33 +39,52 @@ namespace Cryptopia.Node.ApplicationInsights
         /// Logs an informational message
         /// </summary>
         /// <param name="message"></param>
-        public override void LogInfo(string message)
+        /// <param name="properties"></param>
+        public override void LogInfo(string message, IDictionary<string, string>? properties)
         {
-            base.LogInfo(message);
+            base.LogInfo(message, properties);
 
-            _TelemetryClient.TrackTrace(message, SeverityLevel.Information);
+            _TelemetryClient.TrackTrace(
+                message, SeverityLevel.Information, properties);
         }
 
         /// <summary>
         /// Logs a warning message
         /// </summary>
         /// <param name="message"></param>
-        public override void LogWarning(string message)
+        /// <param name="properties"></param>
+        public override void LogWarning(string message, IDictionary<string, string>? properties)
         {
-            base.LogWarning(message);
+            base.LogWarning(message, properties);
 
-            _TelemetryClient.TrackTrace(message, SeverityLevel.Warning);
+            _TelemetryClient.TrackTrace(
+                message, SeverityLevel.Warning, properties);
         }
 
         /// <summary>
         /// Logs an error message
         /// </summary>
         /// <param name="message"></param>
-        public override void LogError(string message)
+        /// <param name="properties"></param>
+        public override void LogError(string message, IDictionary<string, string>? properties)
         {
-            base.LogError(message);
+            base.LogError(message, properties);
 
-            _TelemetryClient.TrackTrace(message, SeverityLevel.Error);
+            _TelemetryClient.TrackTrace(
+                message, SeverityLevel.Error, properties);
+        }
+
+        /// <summary>
+        /// Logs an exception
+        /// </summary>
+        /// <param name="ex"></param>
+        /// <param name="properties"></param>
+        public override void LogException(Exception ex, IDictionary<string, string>? properties)
+        {
+            base.LogException(ex, properties);
+
+            _TelemetryClient.TrackException(
+                ex, properties);
         }
     }
 }

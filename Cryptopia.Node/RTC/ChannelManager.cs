@@ -23,23 +23,7 @@ namespace Cryptopia.Node.RTC
         /// <summary>
         /// Logging service
         /// </summary>
-        public ILoggingService LoggingService
-        { 
-            get
-            {
-                if (null == _LoggingService)
-                {
-                    _LoggingService = new AppLoggingService();
-                }
-
-                return _LoggingService;
-            }
-            set
-            {
-                _LoggingService = value;
-            }
-        }
-        private ILoggingService? _LoggingService;
+        public ILoggingService? LoggingService;
 
         // Internal
         private bool _Disposed = false;
@@ -282,9 +266,9 @@ namespace Cryptopia.Node.RTC
                     _Channels.Clear();
 
                     // Dispose the logging service
-                    if (null != _LoggingService)
+                    if (null != LoggingService)
                     {
-                        _LoggingService.Dispose();
+                        LoggingService.Dispose();
                     }
                 }
 

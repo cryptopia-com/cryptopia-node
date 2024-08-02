@@ -157,14 +157,29 @@ namespace Cryptopia.Node.RTC
                 // Notify high latency
                 if (shouldNotifyHighLatency)
                 {
-                    OnHighLatencyDetected();
+                    OnHighLatencyDetected(_Latency);
                 }
             }
         }
         private double _Latency;
 
+        /// <summary>
+        /// Indicates whether the channel has high latency (thread-safe)
+        /// </summary>
+        public bool IsHigLatency
+        {
+            get
+            {
+                lock (_HeartbeatLock)
+                {
+                    return _IsHighLatency;
+                }
+            }
+        }
+        private bool _IsHighLatency;
+
         // Services
-        protected ILoggingService LoggingService { get; private set; }
+        protected ILoggingService? LoggingService { get; private set; }
         protected ISignallingService SignallingService { get; private set; }
 
         // Internal
@@ -189,7 +204,7 @@ namespace Cryptopia.Node.RTC
         public event EventHandler<ChannelState>? OnStateChange;
         public event EventHandler<RTCMessageEnvelope>? OnMessage;
         public event EventHandler<double>? OnLatency;
-        public event EventHandler? OnHighLatency;
+        public event EventHandler<double>? OnHighLatency;
         public event EventHandler? OnTimeout;
         public event EventHandler? OnDispose;
 
@@ -198,12 +213,12 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         /// <param name="isPolite"></param>
         /// <param name="isInitiatedByUs"></param>
-        /// <param name="loggingService"></param>
         /// <param name="signallingService"></param>
+        /// <param name="loggingService"></param>
         public BaseChannel(
-            bool isPolite, 
-            bool isInitiatedByUs, 
-            ILoggingService loggingService, 
+            bool isPolite,
+            bool isInitiatedByUs,
+            ILoggingService? loggingService,
             ISignallingService signallingService)
         {
             IsPolite = isPolite;
@@ -254,7 +269,7 @@ namespace Cryptopia.Node.RTC
             {
                 if (channel == null || string.IsNullOrEmpty(channel.label))
                 {
-                    LoggingService.LogError("Received a data channel with no label");
+                    LoggingService?.LogError("Received a data channel with no label");
                     return;
                 }
 
@@ -269,7 +284,7 @@ namespace Cryptopia.Node.RTC
                         break;
 
                     default:
-                        LoggingService.LogError($"Received an unknown channel: {channel.label}");
+                        LoggingService?.LogError($"Received an unknown channel: {channel.label}");
                         break;
                 }
             };
@@ -350,7 +365,7 @@ namespace Cryptopia.Node.RTC
             // Notify high latency
             if (shouldNotifyHighLatency)
             {
-                OnHighLatencyDetected();
+                OnHighLatencyDetected(_Latency);
             }
         }
 
@@ -361,7 +376,6 @@ namespace Cryptopia.Node.RTC
         private async Task ConnectAsync()
         {
             // Indicate connecting started
-            LoggingService.LogInfo("Connecting");
             State = ChannelState.Connecting;
 
             // Connect to signalling server
@@ -410,14 +424,14 @@ namespace Cryptopia.Node.RTC
             if (IsInitiatedByUs)
             {
                 var exception = new InvalidOperationException("Channel initiated by us");
-                LoggingService.LogError(exception.Message);
+                LoggingService?.LogException(exception);
                 throw exception;
             }
 
             if (State != ChannelState.Initiating)
             {
                 var exception = new InvalidOperationException("Can only accept offers in the iniating state");
-                LoggingService.LogError(exception.Message);
+                LoggingService?.LogException(exception);
                 throw exception;
             }
 
@@ -430,7 +444,7 @@ namespace Cryptopia.Node.RTC
             {
                 if (_State != ChannelState.Connecting)
                 {
-                    LoggingService.LogWarning($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                    LoggingService?.LogWarning($"Expected {ChannelState.Connecting} state instead of {_State} state");
                     return;
                 }
 
@@ -447,7 +461,6 @@ namespace Cryptopia.Node.RTC
             }
 
             // Accept offer
-            LoggingService.LogInfo("Accepting offer");
             var remoteSessionDescription = new RTCSessionDescriptionInit()
             {
                 sdp = offer.SDP,
@@ -457,7 +470,9 @@ namespace Cryptopia.Node.RTC
             // Assert peer connection
             if (null == _PeerConnection)
             {
-                throw new InvalidOperationException("Peer connection not initialized");
+                var exception = new InvalidOperationException("Peer connection not initialized");
+                LoggingService?.LogException(exception);
+                throw exception;
             }
 
             _PeerConnection.setRemoteDescription(remoteSessionDescription);
@@ -469,8 +484,8 @@ namespace Cryptopia.Node.RTC
             // Something went wrong?
             if (State != ChannelState.Signalling)
             {
-                // TODO: Revert?
-                LoggingService.LogWarning("Something went wrong while creating an answer");
+                var exception = new InvalidOperationException("Channel not in signalling state");
+                LoggingService?.LogException(exception);
                 return;
             }
 
@@ -519,7 +534,7 @@ namespace Cryptopia.Node.RTC
             {
                 if (_State != ChannelState.Open)
                 {
-                    LoggingService.LogWarning("Channel is not open");
+                    LoggingService?.LogWarning("Channel is not open");
                     return;
                 }
 
@@ -579,9 +594,6 @@ namespace Cryptopia.Node.RTC
 
                 // Mark closed
                 State = ChannelState.Closed;
-
-                // Log
-                LoggingService.LogInfo("Channel is closed");
             }
         }
 
@@ -593,7 +605,9 @@ namespace Cryptopia.Node.RTC
         {
             if (State != ChannelState.Open || null == _DataChannel)
             {
-                throw new InvalidOperationException("Channel not open");
+                var exception = new InvalidOperationException("Channel not open");
+                LoggingService?.LogException(exception);
+                throw exception;
             }
 
             // Transmit over data channel
@@ -610,7 +624,9 @@ namespace Cryptopia.Node.RTC
         {
             if (null == _CommandChannel)
             {
-                throw new InvalidOperationException("Channel not open");
+                var exception = new InvalidOperationException("Channel not open");
+                LoggingService?.LogException(exception);
+                throw exception;
             }
 
             // Reset 
@@ -639,7 +655,9 @@ namespace Cryptopia.Node.RTC
         {
             if (null == _CommandChannel)
             {
-                throw new InvalidOperationException("Channel not open");
+                var exception = new InvalidOperationException("Channel not open");
+                LoggingService?.LogException(exception);
+                throw exception;
             }
 
             // Pong
@@ -679,7 +697,7 @@ namespace Cryptopia.Node.RTC
             // Notify high latency
             if (shouldNotifyHighLatency)
             {
-                OnHighLatencyDetected();
+                OnHighLatencyDetected(_Latency);
             }
         }
 
@@ -783,7 +801,16 @@ namespace Cryptopia.Node.RTC
             shouldNotifyChange = true;
             if (_Latency > MaxLatency)
             {
-                shouldNotifyHighLatency = true;
+                if (!_IsHighLatency)
+                {
+                    _IsHighLatency = true;
+                    shouldNotifyHighLatency = true;
+                }
+            }
+
+            else
+            {
+                _IsHighLatency = false;
             }
         }
 
@@ -797,7 +824,7 @@ namespace Cryptopia.Node.RTC
         {
             if (null != _DataChannel)
             {
-                LoggingService.LogError("Data channel already set");
+                LoggingService?.LogError("Data channel already set");
                 return;
             }
 
@@ -850,7 +877,7 @@ namespace Cryptopia.Node.RTC
         {
             if (null != _CommandChannel)
             {
-                LoggingService.LogError("Command channel already set");
+                LoggingService?.LogError("Command channel already set");
                 return;
             }
 
@@ -874,13 +901,13 @@ namespace Cryptopia.Node.RTC
         {
             if (null == _PeerConnection)
             {
-                LoggingService.LogError("Peer connection not initizlized");
+                LoggingService?.LogError("Peer connection not initizlized");
                 return;
             }
 
             if (candidate == null || string.IsNullOrEmpty(candidate.Candidate))
             {
-                LoggingService.LogError("Invalid ICE candidate");
+                LoggingService?.LogError("Invalid ICE candidate");
                 return;
             }
 
@@ -888,7 +915,6 @@ namespace Cryptopia.Node.RTC
             var sdpMid = candidate.SdpMid == "0" ? null : candidate.SdpMid;
 
             // Add ICE Candidate
-            LoggingService.LogInfo("Adding ICE candidate");
             var iceCandidate = new RTCIceCandidateInit
             {
                 candidate = candidate.Candidate,
@@ -1035,7 +1061,7 @@ namespace Cryptopia.Node.RTC
         {
             if (candidate == null || string.IsNullOrEmpty(candidate.candidate))
             {
-                LoggingService.LogError("Invalid ICE candidate");
+                LoggingService?.LogError("Invalid ICE candidate");
                 return;
             }
 
@@ -1077,8 +1103,6 @@ namespace Cryptopia.Node.RTC
             {
                 return;
             }
-
-            LoggingService.LogInfo("Connection is stable");
             State = ChannelState.Open;
 
             // Close signalling
@@ -1095,7 +1119,6 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         protected virtual void OnCommandChannelOpen()
         {
-            LoggingService.LogInfo("Command channel opened");
             CheckStable();
         }
 
@@ -1106,7 +1129,7 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         protected virtual void OnCommandChannelClose()
         {
-            LoggingService.LogInfo("Command channel closed"); 
+            // Nothing here
         }
 
         /// <summary>
@@ -1117,7 +1140,7 @@ namespace Cryptopia.Node.RTC
         /// <param name="error">The error that occurred</param>
         protected virtual void OnCommandChannelError(string error)
         {
-            LoggingService.LogError(error);
+            LoggingService?.LogError(error);
             State = ChannelState.Failed;
         }
 
@@ -1134,12 +1157,9 @@ namespace Cryptopia.Node.RTC
             var message = System.Text.Encoding.UTF8.GetString(bytes);
             if (!message.TryParseEnum<ChannelCommand>(out var command))
             {
-                LoggingService.LogWarning($"Received unknown command: {message}");
+                LoggingService?.LogWarning($"Received unknown command: {message}");
                 return;
             }
-
-            // Log command
-            LoggingService.Log($"/{command}");
 
             // Execute command
             switch (command)
@@ -1169,7 +1189,6 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         protected virtual void OnDataChannelOpen()
         {
-            LoggingService.LogInfo("Data channel opened");
             CheckStable();
         }
 
@@ -1180,7 +1199,7 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         protected virtual void OnDataChannelClose()
         {
-            LoggingService.LogInfo("Data channel closed");
+            // Nothing here
         }
 
         /// <summary>
@@ -1191,7 +1210,7 @@ namespace Cryptopia.Node.RTC
         /// <param name="error">The error that occurred</param>
         protected virtual void OnDataChannelError(string error)
         {
-            LoggingService.LogError(error);
+            LoggingService?.LogError(error);
             State = ChannelState.Failed;
         }
 
@@ -1210,14 +1229,14 @@ namespace Cryptopia.Node.RTC
             // Check if ping
             if (message.Equals("ping", StringComparison.InvariantCultureIgnoreCase))
             {
-                LoggingService.Log($">: pong");
+                LoggingService?.Log($">: pong");
                 Send("pong");
             }
 
             // Echo message
             else if (message.StartsWith("echo:", StringComparison.InvariantCultureIgnoreCase))
             {
-                LoggingService.Log($">: {message.Substring("echo:".Length).TrimStart()}");
+                LoggingService?.Log($">: {message.Substring("echo:".Length).TrimStart()}");
                 Send(message);
             }
 
@@ -1227,7 +1246,7 @@ namespace Cryptopia.Node.RTC
                 // Assert
                 if (null == envelope)
                 {
-                    LoggingService.LogError("Failed to deserialize message");
+                    LoggingService?.LogError("Failed to deserialize message");
                     return;
                 }
 
@@ -1239,7 +1258,7 @@ namespace Cryptopia.Node.RTC
             }
             else 
             {
-                LoggingService.LogError("Failed to deserialize message");
+                LoggingService?.LogError("Failed to deserialize message");
             }
         }
 
@@ -1295,19 +1314,18 @@ namespace Cryptopia.Node.RTC
         /// <summary>
         /// Called when the heartbeat times out
         /// </summary>
-        private void OnHeartbeatTimeout()
+        protected virtual void OnHeartbeatTimeout()
         {
-            LoggingService.LogError("Heartbeat timeout");
             OnTimeout?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>
         /// Called when high latency is detected
         /// </summary>
-        private void OnHighLatencyDetected()
+        /// <param name="latency"></param>
+        protected virtual void OnHighLatencyDetected(double latency)
         {
-            LoggingService.LogWarning("High latency detected");
-            OnHighLatency?.Invoke(this, EventArgs.Empty);
+            OnHighLatency?.Invoke(this, latency);
         }
 
         #endregion

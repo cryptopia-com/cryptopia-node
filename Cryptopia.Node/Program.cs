@@ -1,4 +1,5 @@
 ﻿using CommandLine;
+using Cryptopia.Node;
 using Cryptopia.Node.ApplicationInsights;
 using Cryptopia.Node.RTC;
 using Microsoft.ApplicationInsights;
@@ -34,6 +35,9 @@ public class Program
         [Option("all", HelpText = "List all channels")]
         public bool All { get; set; }
     }
+
+    [Verb("exit", HelpText = "Exit the application")]
+    public class ExitOptions { }
 
     /// <summary>
     /// The application mode
@@ -94,7 +98,9 @@ public class Program
     /// <returns></returns>
     private static int Run(bool stream)
     {
-        // Are we using Application Insights?
+        ILoggingService loggingService;
+
+        // Use Application Insights logging service
         var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
         if (!string.IsNullOrEmpty(insightsConnectionString))
         {
@@ -102,11 +108,7 @@ public class Program
             configuration.ConnectionString = insightsConnectionString;
 
             _TelemetryClient = new TelemetryClient(configuration);
-            var insightsLoggingService = new ApplicationInsightsLoggingService(_TelemetryClient);
-
-            insightsLoggingService.LogInfo("Started with Application Insights");
-            _TelemetryClient.Flush();
-            Thread.Sleep(50);
+            loggingService = new ApplicationInsightsLoggingService(_TelemetryClient);
 
             // Use insights to log unhandled exceptions
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
@@ -117,7 +119,13 @@ public class Program
             };
 
             // Use insights logging service
-            ChannelManager.Instance.LoggingService = insightsLoggingService;
+            ChannelManager.Instance.LoggingService = loggingService;
+        }
+
+        // Use the default logging service
+        else
+        {
+            loggingService = new AppLoggingService();
         }
 
         // Listen for process exit
@@ -126,7 +134,7 @@ public class Program
         // Setup WebSocket server
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
         _Server = new WebSocketServer($"ws://0.0.0.0:{port}");
-        _Server.AddWebSocketService<RTCSignallingBehavior>("/");
+        _Server.AddWebSocketService("/", () => new RTCSignallingBehavior(loggingService));
         _Server.Start();
 
         Task.Run(() => ProcessInput(_ApplicationCTS.Token));
@@ -142,8 +150,6 @@ public class Program
 
         return 0;
     }
-
-    
 
     /// <summary>
     /// Called when the cancel key is pressed
@@ -184,6 +190,71 @@ public class Program
         }
 
         e.Cancel = false;
+    }
+
+    /// <summary>
+    /// Process input on the main thread that is read from the console by a separate thread
+    /// </summary>
+    /// <param name="token"></param>
+    private static void ProcessInput(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            string? inputToProcess = null;
+
+            lock (_InputLock)
+            {
+                // Wait for input to be available
+                while (!_InputAvailable || _InputProcessing)
+                {
+                    Monitor.Wait(_InputLock);
+                }
+
+                if (!string.IsNullOrEmpty(_Input))
+                {
+                    inputToProcess = _Input;
+
+                    // Reset the input
+                    _Input = null;
+                    _InputAvailable = false;
+
+                    // Signal input processing
+                    _InputProcessing = true;
+                    Monitor.PulseAll(_InputLock);
+                }
+
+                else
+                {
+                    // Reset the input state if it's empty
+                    _InputAvailable = false;
+                    _InputProcessing = false;
+
+                    // Signal nothing to process
+                    Monitor.PulseAll(_InputLock);
+                }
+            }
+
+            if (inputToProcess != null)
+            {
+                // Execute the command (outside the lock to avoid holding the lock for long periods)
+                var args = inputToProcess.Split(' ');
+                Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions, ExitOptions>(args)
+                    .MapResult(
+                        (VersionOptions opts) => RunVersionCommand(),
+                        (StatusOptions opts) => RunStatusCommand(),
+                        (StreamOptions opts) => RunStreamCommand(),
+                        (ListOptions opts) => RunListCommand(opts.All),
+                        (ExitOptions opts) => RunExitCommand(),
+                        errs => HandleParseError(errs));
+
+                lock (_InputLock)
+                {
+                    // Signal input processed
+                    _InputProcessing = false;
+                    Monitor.PulseAll(_InputLock);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -387,66 +458,6 @@ public class Program
         }
     }
 
-    private static void ProcessInput(CancellationToken token)
-    {
-        while (!token.IsCancellationRequested)
-        {
-            string? inputToProcess = null;
-
-            lock (_InputLock)
-            {
-                // Wait for input to be available
-                while (!_InputAvailable || _InputProcessing)
-                {
-                    Monitor.Wait(_InputLock);
-                }
-
-                if (!string.IsNullOrEmpty(_Input))
-                {
-                    inputToProcess = _Input;
-
-                    // Reset the input
-                    _Input = null;
-                    _InputAvailable = false;
-
-                    // Signal input processing
-                    _InputProcessing = true;
-                    Monitor.PulseAll(_InputLock);
-                }
-
-                else
-                {
-                    // Reset the input state if it's empty
-                    _InputAvailable = false;
-                    _InputProcessing = false;
-
-                    // Signal nothing to process
-                    Monitor.PulseAll(_InputLock);
-                }
-            }
-
-            if (inputToProcess != null)
-            {
-                // Execute the command (outside the lock to avoid holding the lock for long periods)
-                var args = inputToProcess.Split(' ');
-                Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions>(args)
-                    .MapResult(
-                        (VersionOptions opts) => RunVersionCommand(),
-                        (StatusOptions opts) => RunStatusCommand(),
-                        (StreamOptions opts) => RunStreamCommand(),
-                        (ListOptions opts) => RunListCommand(opts.All),
-                        errs => HandleParseError(errs));
-
-                lock (_InputLock)
-                {
-                    // Signal input processed
-                    _InputProcessing = false;
-                    Monitor.PulseAll(_InputLock);
-                }
-            }
-        }
-    }
-
     /// <summary>
     /// Display the version information
     /// </summary>
@@ -521,6 +532,36 @@ public class Program
         }
 
         AnsiConsole.Write(table);
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Exit the application
+    /// </summary>
+    /// <returns></returns>
+    private static int RunExitCommand()
+    {
+        try
+        {
+            _Server?.Stop();
+            StopListening();
+            StopStreaming();
+        }
+        catch (Exception ex)
+        {
+            _TelemetryClient?.TrackException(ex);
+            throw;
+        }
+        finally
+        {
+            _ApplicationCTS.Cancel();
+            lock (_InputLock)
+            {
+                // Notify all waiting threads to exit
+                Monitor.PulseAll(_InputLock);
+            }
+        }
 
         return 0;
     }
