@@ -110,11 +110,11 @@ namespace Cryptopia.Node.RTC
         public double HeartbeatTimeout { get; private set; } = 1000;
 
         /// <summary>
-        /// Max signalling timeout in milliseconds 
+        /// Signalling timeout in milliseconds 
         /// 
         /// After this duration, the channel will consider the connection as timed out
         /// </summary>
-        public double MaxSignallingTimeout { get; set; } = 10000;
+        public double SignallingTimeout { get; set; } = 10000;
 
         /// <summary>
         /// Max latency in milliseconds (zero means no latency)
@@ -234,8 +234,10 @@ namespace Cryptopia.Node.RTC
             IsInitiatedByUs = isInitiatedByUs;
             LoggingService = loggingService;
             SignallingService = signallingService;
+
+            // Setup signalling timer
             _SignallingTimer = new CancellableDelay(
-                TimeSpan.FromMilliseconds(MaxSignallingTimeout));
+                TimeSpan.FromMilliseconds(SignallingTimeout));
             _SignallingTimer.OnTimeout += OnSignallingTimeoutDetected;
         }
 
@@ -388,6 +390,32 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Starts the signalling timer (thread-safe)
+        /// 
+        /// Throws an exception if the signalling timer is already started
+        /// </summary>
+        private void StartSignallingTimer()
+        {
+            bool signallingTimerAlreadyStarted = false;
+            lock (_ChannelLock)
+            {
+                signallingTimerAlreadyStarted = _SignallingTimer.IsStarted || _SignallingTimer.IsCancelled;
+                if (!signallingTimerAlreadyStarted)
+                {
+                    // Start signalling timer
+                    _SignallingTimer.Start();
+                }
+            }
+
+            if (signallingTimerAlreadyStarted)
+            {
+                var exception = new InvalidOperationException("Signalling timer already started");
+                LoggingService?.LogException(exception);
+                throw exception;
+            }
+        }
+
+        /// <summary>
         /// Connects to the signalling server
         /// </summary>
         /// <returns></returns>
@@ -402,7 +430,7 @@ namespace Cryptopia.Node.RTC
                 SignallingService.Connect();
 
                 // Set the timeout duration for connecting (half of signalling time)
-                var timeout = DateTime.Now + TimeSpan.FromMilliseconds(MaxSignallingTimeout * 0.5f);
+                var timeout = DateTime.Now + TimeSpan.FromMilliseconds(SignallingTimeout * 0.5f);
                 while (!SignallingService.IsOpen && DateTime.Now < timeout)
                 {
                     await Task.Delay(100);
@@ -410,14 +438,20 @@ namespace Cryptopia.Node.RTC
 
                 if (!SignallingService.IsOpen)
                 {
-                    // Indicate signalling started
                     bool shouldNotifyChange;
                     bool shouldNotifyTimeout = false;
                     lock (_ChannelLock)
                     {
-                        if (_State != ChannelState.Connecting)
+                        if (IsDisposedOrDisposing())
                         {
                             return;
+                        }
+
+                        if (_State != ChannelState.Connecting)
+                        {
+                            var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                            LoggingService?.LogException(exception);
+                            throw exception;
                         }
 
                         SetState(
@@ -477,28 +511,13 @@ namespace Cryptopia.Node.RTC
 
             if (State != ChannelState.Initiating)
             {
-                var exception = new InvalidOperationException("Can only accept offers in the iniating state");
+                var exception = new InvalidOperationException("Offer can only be accepted in the initiating state");
                 LoggingService?.LogException(exception);
                 throw exception;
             }
 
-            bool signallingTimerAlreadyStarted = false;
-            lock (_ChannelLock)
-            {
-                signallingTimerAlreadyStarted = _SignallingTimer.IsStarted || _SignallingTimer.IsCancelled;
-                if (!signallingTimerAlreadyStarted)
-                {
-                    // Start signalling timer
-                    _SignallingTimer.Start();
-                }
-            }
-
-            if (signallingTimerAlreadyStarted)
-            {
-                var exception = new InvalidOperationException("Signalling timer already started");
-                LoggingService?.LogException(exception);
-                throw exception;
-            }
+            // Detect signalling timeout
+            StartSignallingTimer();
 
             // Connect to signalling server
             await ConnectAsync();
@@ -507,9 +526,7 @@ namespace Cryptopia.Node.RTC
             bool shouldNotifyChange;
             lock (_ChannelLock)
             {
-                if (_State == ChannelState.Closing ||
-                    _State == ChannelState.Disposing ||
-                    _State == ChannelState.Disposed)
+                if (IsDisposedOrDisposing())
                 {
                     return;
                 }
@@ -554,12 +571,20 @@ namespace Cryptopia.Node.RTC
             var answer = _PeerConnection.createAnswer();
             await _PeerConnection.setLocalDescription(answer);
 
-            // Something went wrong?
-            if (State != ChannelState.Signalling)
+            // Assert signalling state
+            lock (_ChannelLock)
             {
-                var exception = new InvalidOperationException("Channel not in signalling state");
-                LoggingService?.LogException(exception);
-                throw exception;
+                if (IsDisposedOrDisposing())
+                {
+                    return;
+                }
+
+                if (_State != ChannelState.Signalling)
+                {
+                    var exception = new InvalidOperationException($"Expected {ChannelState.Signalling} state instead of {_State} state");
+                    LoggingService?.LogException(exception);
+                    throw exception;
+                }
             }
 
             // Send answer
@@ -913,9 +938,12 @@ namespace Cryptopia.Node.RTC
                 bool shouldNotifyChange, shouldNotifyOpen;
                 lock (_ChannelLock)
                 {
-                    if (_State == ChannelState.Closing ||
-                        _State == ChannelState.Disposing ||
-                        _State == ChannelState.Disposed)
+                    if (IsDisposedOrDisposing())
+                    {
+                        return;
+                    }
+
+                    if (_State == ChannelState.Closing)
                     {
                         return;
                     }
@@ -1005,6 +1033,15 @@ namespace Cryptopia.Node.RTC
         }
 
         /// <summary>
+        /// Returns whether the channel is disposed or disposing (not thread-safe)
+        /// </summary>
+        /// <returns></returns>
+        private bool IsDisposedOrDisposing()
+        {
+            return _State == ChannelState.Disposing || _State == ChannelState.Disposed;
+        }
+
+        /// <summary>
         /// Disposes the channel and frees resources
         /// 
         /// Handles the cleanup of resources when the channel is no longer needed and notifies the other party
@@ -1027,8 +1064,7 @@ namespace Cryptopia.Node.RTC
             bool shouldNotifyChange;
             lock (_ChannelLock)
             {
-                if (_State == ChannelState.Disposing ||
-                    _State == ChannelState.Disposed)
+                if (IsDisposedOrDisposing())
                 {
                     return;
                 }
@@ -1181,9 +1217,12 @@ namespace Cryptopia.Node.RTC
             bool shouldNotifyChange, shouldNotifyOpen;
             lock (_ChannelLock)
             {
+                if (IsDisposedOrDisposing())
+                {
+                    return;
+                }
+
                 if (_State == ChannelState.Closing ||
-                    _State == ChannelState.Disposing ||
-                    _State == ChannelState.Disposed || 
                     _State == ChannelState.Failed ||
                     _State == ChannelState.Open)
                 {
