@@ -73,9 +73,8 @@
                 Payload = new RTCAnswerMessage()
                 {
                     Answer = answer
-                },
-                Signature = ""
-            });
+                }
+            }.Sign("PRIVATE_KEY"));
         }
 
         /// <summary>

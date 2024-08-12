@@ -111,6 +111,11 @@ namespace Cryptopia.Node.RTC
         /// <returns></returns>
         public IAccountChannel CreateChannel(string account, string signer, ISignallingService signalling)
         {
+            if (IsKnown(account, signer))
+            {
+                throw new InvalidOperationException("Channel already exists");
+            }
+
             var channel = new AccountChannel(
                 true, // Polite
                 false, // Not initiated by us
@@ -147,7 +152,7 @@ namespace Cryptopia.Node.RTC
         /// <param name="account"></param>
         /// <param name="signer"></param>
         /// <param name="dispose"></param>
-        private void RemoveChannel(string account, string signer, bool dispose)
+        public void RemoveChannel(string account, string signer, bool dispose = true)
         {
             if (_Channels.TryGetValue(account, out var channels))
             {

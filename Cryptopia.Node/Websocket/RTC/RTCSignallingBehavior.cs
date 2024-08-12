@@ -79,7 +79,7 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
 
             if (message.Payload.Type == RTCMessageType.Offer)
             {
-                HandleOfferMessage(message);
+                Task.Run(() => HandleOfferMessageAsync(message));
             }
 
             else
@@ -92,7 +92,7 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
     /// <summary>
     /// Handles incoming offer messages asynchronously
     /// </summary>
-    private async void HandleOfferMessage(RTCMessageEnvelope message)
+    private async void HandleOfferMessageAsync(RTCMessageEnvelope message)
     {
         var payload = (RTCOfferMessage)message.Payload;
         var offer = payload.Offer;
@@ -121,11 +121,73 @@ public class RTCSignallingBehavior : WebSocketBehavior, ISignallingService
             return;
         }
 
-        await ChannelManager.Instance
-            .CreateChannel(
-                message.Sender.Account, 
-                message.Sender.Signer, 
-                this)
-            .AcceptAsync(offer);
+        // Verify signature
+        if (!message.Verify())
+        {
+            LoggingService?.LogError(
+                "Offer verification failed", 
+                new Dictionary<string, string>
+                {
+                    { "node", message.Receiver.Account },
+                    { "account", message.Sender.Account },
+                    { "signer", message.Sender.Signer }
+                });
+            return;
+        }
+
+        // Verify age
+        if (message.IsExpired())
+        {
+            LoggingService?.LogWarning(
+                "Offer expired", 
+                new Dictionary<string, string>
+                {
+                    { "node", message.Receiver.Account },
+                    { "account", message.Sender.Account },
+                    { "signer", message.Sender.Signer }
+                });
+            return;
+        }
+
+        var account = message.Sender.Account;
+        var signer = message.Sender.Signer;
+
+        // Remove existing channel (if any)
+        if (ChannelManager.Instance.IsKnown(account, signer))
+        { 
+            LoggingService?.LogWarning(
+                "Removing existing channel", 
+                new Dictionary<string, string>
+                {
+                    { "reason", "Received new offer" },
+                    { "node", message.Receiver.Account },
+                    { "account", account },
+                    { "signer", signer }
+                });
+
+            ChannelManager.Instance.RemoveChannel(
+                account, signer);
+        }
+
+        try
+        {
+            // Create a new channel
+            await ChannelManager.Instance
+                .CreateChannel(
+                    message.Sender.Account,
+                    message.Sender.Signer,
+                    this)
+                .AcceptAsync(offer);
+        }
+        catch (Exception ex)
+        {
+            LoggingService?.LogException(ex, new Dictionary<string, string>
+            {
+                { "event", "HandleOfferMessageAsync" },
+                { "node", message.Receiver.Account },
+                { "account", account },
+                { "signer", signer }
+            });
+        }
     }
 }
