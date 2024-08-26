@@ -161,6 +161,13 @@ public class Program
             privateKey.AppendChar(c);
         }
 
+        if (privateKey.Length == 0)
+        {
+            var exception = new ArgumentException("The PRIVATE_KEY environment variable is required");
+            loggingService.LogException(exception);
+            throw exception;
+        }
+
         AccountManager.Instance.Signer = new LocalAccount(privateKey, 0);
         ChannelManager.Instance.LoggingService = loggingService;
 
