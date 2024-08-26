@@ -79,9 +79,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 Payload = new RTCAnswerMessage()
                 {
                     Answer = answer
-                },
-                Signature = ""
-            });
+                }
+            }.Sign("PRIVATE_KEY"));
         }
 
         /// <summary>

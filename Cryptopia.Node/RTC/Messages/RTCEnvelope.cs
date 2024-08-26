@@ -55,6 +55,32 @@ namespace Cryptopia.Node.RTC.Messages
         /// The signature that proves the sender of the message
         /// </summary>
         [JsonProperty("signature")]
-        public required string Signature { get; set; }
+        public string? Signature { get; set; }
+
+        public bool IsExpired()
+        {
+            return ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds() - Timestamp > MaxAge;
+        }
+
+        /// <summary>
+        /// Signs the RTCMessageEnvelope with a private key
+        /// </summary>
+        /// <returns></returns>
+        public RTCMessageEnvelope Sign(string privateKey)
+        {
+            // TODO: Implement signing
+            return this;
+        }
+
+        /// <summary>
+        /// Verifies the signature of a RTCMessageEnvelope
+        /// </summary>
+        /// <param name="envelope"></param>
+        /// <returns></returns>
+        public bool Verify()
+        {
+            // TODO: Implement verification
+            return true;
+        }
     }
 }

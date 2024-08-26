@@ -8,22 +8,6 @@ namespace Cryptopia.Node.RTC.Extensions
     public static class RTCExtensions
     {
         /// <summary>
-        /// Serialize a RTCMessageEnvelope to JSON string, including type information
-        /// </summary>
-        /// <param name="obj"></param>
-        /// <returns></returns>
-        public static string Serialize(this RTCMessageEnvelope obj)
-        {
-            JsonSerializerSettings settings = new JsonSerializerSettings
-            {
-                Formatting = Formatting.Indented,
-                TypeNameHandling = TypeNameHandling.None
-            };
-
-            return JsonConvert.SerializeObject(obj, settings);
-        }
-
-        /// <summary>
         /// Returns true if json is a RTC Message
         /// </summary>
         /// <param name="json"></param>
@@ -56,6 +40,22 @@ namespace Cryptopia.Node.RTC.Extensions
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Serialize a RTCMessageEnvelope to JSON string, including type information
+        /// </summary>
+        /// <param name="obj"></param>
+        /// <returns></returns>
+        public static string Serialize(this RTCMessageEnvelope obj)
+        {
+            JsonSerializerSettings settings = new JsonSerializerSettings
+            {
+                Formatting = Formatting.Indented,
+                TypeNameHandling = TypeNameHandling.None
+            };
+
+            return JsonConvert.SerializeObject(obj, settings);
         }
 
         /// <summary>
