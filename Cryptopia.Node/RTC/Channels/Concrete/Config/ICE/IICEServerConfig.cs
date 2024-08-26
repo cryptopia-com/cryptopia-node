@@ -1,4 +1,6 @@
-﻿namespace Cryptopia.Node.RTC
+﻿using Cryptopia.Node.RTC.Channels.Config.ICE;
+
+namespace Cryptopia.Node.RTC.Channels.Concrete.Config.ICE
 {
     /// <summary>
     /// ICE Server configuration

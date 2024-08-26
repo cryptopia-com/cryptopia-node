@@ -1,4 +1,4 @@
-﻿namespace Cryptopia.Node.RTC
+﻿namespace Cryptopia.Node.RTC.Channels
 {
     /// <summary>
     /// A Channel from a node (us) to an account that is registered with 
@@ -13,7 +13,7 @@
         /// <summary>
         /// The signer of the destination account (local)
         /// </summary>
-        LocalAccount DestinationSigner { get; }
+        ExternalAccount DestinationSigner { get; }
 
         /// <summary>
         /// The registered destination account (smart-contract)

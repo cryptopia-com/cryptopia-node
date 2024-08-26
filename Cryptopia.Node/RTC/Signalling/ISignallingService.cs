@@ -1,4 +1,6 @@
-﻿namespace Cryptopia.Node.RTC
+﻿using Cryptopia.Node.RTC.Messages;
+
+namespace Cryptopia.Node.RTC.Signalling
 {
     /// <summary>
     /// Service for RTC signalling with clients

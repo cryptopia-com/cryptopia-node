@@ -1,4 +1,4 @@
-﻿namespace Cryptopia.Node.RTC
+﻿namespace Cryptopia.Node.RTC.Channels.Types
 {
     /// <summary>
     /// The state of a channel

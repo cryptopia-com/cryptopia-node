@@ -1,8 +1,9 @@
 ﻿using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using WebSocketSharp;
+using Cryptopia.Node.RTC.Messages;
 
-namespace Cryptopia.Node.RTC
+namespace Cryptopia.Node.RTC.Extensions
 {
     public static class RTCExtensions
     {
@@ -68,7 +69,7 @@ namespace Cryptopia.Node.RTC
             var envelopeToken = JObject.Parse(json);
             var payloadToken = envelopeToken["payload"];
 
-            if (payloadToken == null) 
+            if (payloadToken == null)
             {
                 throw new InvalidCastException("Missing payload");
             }
@@ -129,7 +130,7 @@ namespace Cryptopia.Node.RTC
         /// <exception cref="InvalidOperationException"></exception>
         public static bool TryDeserializeRTCMessage(this string json, out RTCMessageEnvelope? envelope)
         {
-            try 
+            try
             {
                 envelope = json.DeserializeRTCMessage();
                 return true;

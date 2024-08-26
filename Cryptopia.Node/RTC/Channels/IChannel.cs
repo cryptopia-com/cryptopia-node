@@ -1,4 +1,8 @@
-﻿namespace Cryptopia.Node.RTC
+﻿using Cryptopia.Node.RTC.Channels.Types;
+using Cryptopia.Node.RTC.Messages;
+using Cryptopia.Node.RTC.Messages.Payloads;
+
+namespace Cryptopia.Node.RTC.Channels
 {
     /// <summary>
     /// Represents a communication channel in the mesh network

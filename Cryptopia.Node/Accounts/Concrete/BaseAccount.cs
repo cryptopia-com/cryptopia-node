@@ -3,7 +3,7 @@
     /// <summary>
     /// Base blockchain account
     /// </summary>
-    public abstract class BaseAccount : IAccount
+    public abstract class BaseAccount : IAccount, IDisposable
     {
         /// <summary>
         /// Default address
@@ -26,5 +26,10 @@
         /// <param name="other"></param>
         /// <returns></returns>
         public abstract bool Equals(IAccount other);
+
+        /// <summary>
+        /// Dispose
+        /// </summary>
+        public virtual void Dispose() { }
     }
 }

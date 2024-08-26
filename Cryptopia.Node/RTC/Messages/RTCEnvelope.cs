@@ -1,6 +1,6 @@
 ﻿using Newtonsoft.Json;
 
-namespace Cryptopia.Node.RTC
+namespace Cryptopia.Node.RTC.Messages
 {
     /// <summary>
     /// RTC message envelope

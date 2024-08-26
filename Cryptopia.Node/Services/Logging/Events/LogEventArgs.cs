@@ -1,4 +1,4 @@
-﻿namespace Cryptopia.Node
+﻿namespace Cryptopia.Node.Services.Logging
 {
     /// <summary>
     /// Log event arguments

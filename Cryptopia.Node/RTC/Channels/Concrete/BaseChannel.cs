@@ -1,12 +1,20 @@
-﻿using SIPSorcery.Net;
+﻿using Cryptopia.Node.RTC.Channels;
+using Cryptopia.Node.RTC.Channels.Config.ICE;
+using Cryptopia.Node.RTC.Channels.Types;
+using Cryptopia.Node.RTC.Extensions;
+using Cryptopia.Node.RTC.Messages;
+using Cryptopia.Node.RTC.Messages.Payloads;
+using Cryptopia.Node.RTC.Signalling;
+using Cryptopia.Node.Services.Logging;
+using SIPSorcery.Net;
 using System.Timers;
 
-namespace Cryptopia.Node.RTC
+namespace Cryptopia.Node.RTC.Channels.Concrete
 {
     /// <summary>
     /// Represents a communication channel in the mesh network
     /// </summary>
-    public abstract class BaseChannel<T>  where T : BaseChannel<T>, IChannel
+    public abstract class BaseChannel<T> where T : BaseChannel<T>, IChannel
     {
         /// <summary>
         /// Indicates whether the channel is stable (thread-safe)
@@ -133,7 +141,7 @@ namespace Cryptopia.Node.RTC
                 lock (_HeartbeatLock)
                 {
                     return _Latency;
-                }  
+                }
             }
             set
             {
@@ -277,7 +285,7 @@ namespace Cryptopia.Node.RTC
                 // Create peer connection
                 _PeerConnection = new RTCPeerConnection(peerConfig);
             }
-            
+
             // Set up event handlers
             _PeerConnection.onicecandidate += OnOnIceCandidate;
             _PeerConnection.oniceconnectionstatechange += OnIceConnectionChange;
@@ -366,7 +374,7 @@ namespace Cryptopia.Node.RTC
                     _HeartbeatTimer.Dispose();
                     _HeartbeatTimer = null;
                 }
-                
+
                 HeartbeatInterval = 0; // Stopped  
                 _IsHeartbeatPending = false;
 
@@ -614,7 +622,7 @@ namespace Cryptopia.Node.RTC
         /// </summary>
         /// <returns></returns>
         public Task CloseAsync()
-        { 
+        {
             return CloseAsync(true);
         }
 
@@ -1407,7 +1415,7 @@ namespace Cryptopia.Node.RTC
                 // Notify subscribers
                 OnMessage?.Invoke(this, envelope);
             }
-            else 
+            else
             {
                 LoggingService?.LogError("Failed to deserialize message");
             }
@@ -1425,7 +1433,7 @@ namespace Cryptopia.Node.RTC
             lock (_ChannelLock)
             {
                 // Set by other thread?
-                if (_State != ChannelState.Connecting && 
+                if (_State != ChannelState.Connecting &&
                     _State != ChannelState.Signalling)
                 {
                     return;
@@ -1482,7 +1490,7 @@ namespace Cryptopia.Node.RTC
                     }
                 }
             }
-            
+
             // Notify timeout
             if (notifyHeartBeatTimeout)
             {

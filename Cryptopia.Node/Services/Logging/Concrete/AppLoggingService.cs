@@ -1,4 +1,4 @@
-﻿namespace Cryptopia.Node
+﻿namespace Cryptopia.Node.Services.Logging
 {
     /// <summary>
     /// Base logging service
@@ -37,7 +37,7 @@
             }
 
             OnLog?.Invoke(this, new LogEventArgs<string>
-            { 
+            {
                 Value = message,
                 Properties = properties
             });

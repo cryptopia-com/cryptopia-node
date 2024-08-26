@@ -1,6 +1,7 @@
-﻿using Newtonsoft.Json;
+﻿using Cryptopia.Node.RTC.Messages.Payloads;
+using Newtonsoft.Json;
 
-namespace Cryptopia.Node.RTC
+namespace Cryptopia.Node.RTC.Messages
 {
     /// <summary>
     /// Message types for the RTC protocol

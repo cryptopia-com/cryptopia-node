@@ -1,7 +1,7 @@
 ﻿using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.DataContracts;
 
-namespace Cryptopia.Node.ApplicationInsights
+namespace Cryptopia.Node.Services.Logging
 {
     /// <summary>
     /// Logging service that uses Application Insights (azure)
@@ -17,7 +17,7 @@ namespace Cryptopia.Node.ApplicationInsights
         /// Constructor
         /// </summary>
         /// <param name="telemetryClient"></param>
-        public ApplicationInsightsLoggingService(TelemetryClient telemetryClient) 
+        public ApplicationInsightsLoggingService(TelemetryClient telemetryClient)
             : base()
         {
             _TelemetryClient = telemetryClient;

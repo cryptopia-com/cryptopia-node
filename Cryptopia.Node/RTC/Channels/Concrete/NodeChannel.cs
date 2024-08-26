@@ -7,9 +7,9 @@ using Cryptopia.Node.Services.Logging;
 namespace Cryptopia.Node.RTC.Channels.Concrete
 {
     /// <summary>
-    /// A Channel from a node (us) to an account that is registered with 
+    /// A Channel from a node (us) to another node (them)
     /// </summary>
-    public class AccountChannel : BaseChannel<AccountChannel>, IAccountChannel
+    public class NodeChannel : BaseChannel<NodeChannel>, INodeChannel
     {
         /// <summary>
         /// The node account (us)
@@ -17,14 +17,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         public LocalAccount OriginSigner { get; private set; }
 
         /// <summary>
-        /// The signer of the destination account (local)
+        /// The signer of the destination account (them)
         /// </summary>
         public ExternalAccount DestinationSigner { get; private set; }
-
-        /// <summary>
-        /// The registered destination account (smart-contract)
-        /// </summary>
-        public RegisteredAccount DestinationAccount { get; private set; }
 
         /// <summary>
         /// Constructor
@@ -35,20 +30,17 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <param name="signallingService"></param>
         /// <param name="originSigner"></param>
         /// <param name="destinationSigner"></param>
-        /// <param name="destinationAccount"></param>
-        public AccountChannel(
+        public NodeChannel(
             bool isPolite,
             bool isInitiatedByUs,
             ILoggingService? loggingService,
             ISignallingService signallingService,
             LocalAccount originSigner,
-            ExternalAccount destinationSigner,
-            RegisteredAccount destinationAccount)
+            ExternalAccount destinationSigner)
             : base(isPolite, isInitiatedByUs, loggingService, signallingService)
         {
             OriginSigner = originSigner;
             DestinationSigner = destinationSigner;
-            DestinationAccount = destinationAccount;
         }
 
         /// <summary>
@@ -68,7 +60,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 Sequence = 0,
                 Receiver = new RTCReceiver()
                 {
-                    Account = DestinationAccount.Address,
+                    Account = "Node",
                     Signer = DestinationSigner.Address
                 },
                 Sender = new RTCSender()
@@ -101,7 +93,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 Sequence = 0,
                 Receiver = new RTCReceiver()
                 {
-                    Account = DestinationAccount.Address,
+                    Account = "Node",
                     Signer = DestinationSigner.Address
                 },
                 Sender = new RTCSender()
@@ -131,7 +123,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 Sequence = 0,
                 Receiver = new RTCReceiver()
                 {
-                    Account = DestinationAccount.Address,
+                    Account = "Node",
                     Signer = DestinationSigner.Address
                 },
                 Sender = new RTCSender()
@@ -191,7 +183,6 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             LoggingService?.LogError("Heartbeat timeout", new Dictionary<string, string>
             {
                 { "node", OriginSigner.Address },
-                { "account", DestinationAccount.Address },
                 { "signer", DestinationSigner.Address }
             });
         }
@@ -208,7 +199,6 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             LoggingService?.LogWarning("High latency detected", new Dictionary<string, string>
             {
                 { "node", OriginSigner.Address },
-                { "account", DestinationAccount.Address },
                 { "signer", DestinationSigner.Address },
                 { "latency", latency.ToString() }
             });

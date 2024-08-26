@@ -1,4 +1,7 @@
-﻿namespace Cryptopia.Node.RTC
+﻿using Cryptopia.Node.RTC.Channels.Config;
+using Cryptopia.Node.RTC.Channels.Config.ICE;
+
+namespace Cryptopia.Node.RTC.Channels.Concrete.Config
 {
     /// <summary>
     /// RTC Channel configuration

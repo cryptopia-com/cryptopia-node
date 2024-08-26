@@ -1,11 +1,13 @@
 ﻿using CommandLine;
 using Cryptopia.Node;
-using Cryptopia.Node.ApplicationInsights;
+using Cryptopia.Node.Commands;
+using Cryptopia.Node.RPC;
 using Cryptopia.Node.RTC;
+using Cryptopia.Node.Services.Logging;
+using Cryptopia.Node.Services.Streaming;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.Extensibility;
-using Spectre.Console;
-using System.Reflection;
+using System.Security;
 using WebSocketSharp.Server;
 
 /// <summary>
@@ -27,13 +29,36 @@ public class Program
     public class StatusOptions { }
 
     [Verb("stream", HelpText = "enable streaming")]
-    public class StreamOptions { }
+    public class StreamOptions 
+    {
+        [Option("nodes", Default = false, HelpText = "Stream nodes")]
+        public bool Nodes { get; set; }
 
-    [Verb("list", HelpText = "List all connected channels")]
+        [Option("accounts", Default = false, HelpText = "Stream accounts")]
+        public bool Accounts { get; set; }
+    }
+
+    [Verb("list", HelpText = "List connected node channels")]
     public class ListOptions
     {
-        [Option("all", HelpText = "List all channels")]
-        public bool All { get; set; }
+        [Option("nodes", Default = false, HelpText = "List nodes")]
+        public bool Nodes { get; set; }
+
+        [Option("accounts", Default = false, HelpText = "List accounts")]
+        public bool Accounts { get; set; }
+
+        [Option("skip", Default = 0, HelpText = "Amount of channels to skip")]
+        public int Skip { get; set; }
+
+        [Option("take", Default = 100, HelpText = "Amount of channels to take")]
+        public int Take { get; set; }
+    }
+
+    [Verb("connect", HelpText = "Connect to a node or account")]
+    public class ConnectOptions
+    {
+        [Option("node", Default = false, HelpText = "The endpoint of the node to connect to")]
+        public string? Node { get; set; }
     }
 
     [Verb("exit", HelpText = "Exit the application")]
@@ -44,6 +69,7 @@ public class Program
     /// </summary>
     public enum Mode
     {
+        None,
         Stream,
         Listen
     }
@@ -56,16 +82,16 @@ public class Program
     // Internal
     private static WebSocketServer? _Server;
     private static TelemetryClient? _TelemetryClient;
-    private static Task? _StreamingTask;
     private static Task? _ListeningTask;
-    private static CancellationTokenSource? _StreamingCTS;
     private static CancellationTokenSource? _ListeningCTS;
     private static CancellationTokenSource _ApplicationCTS = new CancellationTokenSource();
+    private static IStreamingService _StreamingService = new ChannelStreamingService();
 
     private static string? _Input = null;
     private static bool _InputProcessing = false;
     private static bool _InputAvailable = false;
     private static readonly object _InputLock = new object();
+    private static readonly object _ModeLock = new object();
 
     /// <summary>
     /// Entry point 
@@ -129,15 +155,22 @@ public class Program
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
 
         // Setup channel manager
+        var privateKey = new SecureString();
+        foreach (var c in Environment.GetEnvironmentVariable("PRIVATE_KEY") ?? string.Empty)
+        {
+            privateKey.AppendChar(c);
+        }
+
+        AccountManager.Instance.Signer = new LocalAccount(privateKey, 0);
         ChannelManager.Instance.LoggingService = loggingService;
 
         // Setup WebSocket server
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
         _Server = new WebSocketServer($"ws://0.0.0.0:{port}");
-        _Server.AddWebSocketService("/", () => new RTCSignallingBehavior(loggingService));
+        _Server.AddWebSocketService("/", () => new SignallingBehavior(loggingService));
         _Server.Start();
 
-        Task.Run(() => ProcessInput(_ApplicationCTS.Token));
+        _ = Task.Run(() => ProcessInput(_ApplicationCTS.Token));
 
         // Set initial mode
         SetMode(stream ? Mode.Stream : Mode.Listen);
@@ -170,6 +203,7 @@ public class Program
             _Server?.Stop();
             StopListening();
             StopStreaming();
+            _StreamingService.Dispose();
         }
         catch (Exception ex)
         {
@@ -240,11 +274,27 @@ public class Program
                 var args = inputToProcess.Split(' ');
                 Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions, ExitOptions>(args)
                     .MapResult(
-                        (VersionOptions opts) => RunVersionCommand(),
-                        (StatusOptions opts) => RunStatusCommand(),
-                        (StreamOptions opts) => RunStreamCommand(),
-                        (ListOptions opts) => RunListCommand(opts.All),
-                        (ExitOptions opts) => RunExitCommand(),
+                        (VersionOptions opts) => new VersionCommand().Execute(),
+                        (StatusOptions opts) => new StatusCommand().Execute(),
+                        (StreamOptions opts) => new StreamCommand().Execute(),
+                        (ListOptions opts) => 
+                        {
+                            ICommand command;
+                            if (opts.Nodes)
+                            {
+                                command = new ListNodesCommand(
+                                    opts.Skip, opts.Take);
+                            }
+
+                            else 
+                            { 
+                                command = new ListAccountsCommand(
+                                    opts.Skip, opts.Take);
+                            }
+
+                            return command.Execute();
+                        },
+                        (ExitOptions opts) => new ExitCommand().Execute(),
                         errs => HandleParseError(errs));
 
                 lock (_InputLock)
@@ -261,21 +311,27 @@ public class Program
     /// Update the application mode
     /// </summary>
     /// <param name="mode"></param>
-    private static void SetMode(Mode mode)
+    public static void SetMode(Mode mode)
     {
-        switch (mode)
+        lock (_ModeLock)
         {
-            case Mode.Stream:
-                StopListening();
-                StartStreaming();
-                break;
-            case Mode.Listen:
-                StopStreaming();
-                StartListening();
-                break;
-        }
+            if (CurrentMode != mode) 
+            {
+                switch (mode)
+                {
+                    case Mode.Stream:
+                        StopListening();
+                        StartStreaming();
+                        break;
+                    case Mode.Listen:
+                        StopStreaming();
+                        StartListening();
+                        break;
+                }
 
-        CurrentMode = mode;
+                CurrentMode = mode;
+            }
+        }
     }
 
     /// <summary>
@@ -283,8 +339,7 @@ public class Program
     /// </summary>
     private static void StartStreaming()
     {
-        _StreamingCTS = new CancellationTokenSource();
-        _StreamingTask = Task.Run(() => Stream(_StreamingCTS.Token));
+        _StreamingService.Start();
     }
 
     /// <summary>
@@ -292,89 +347,7 @@ public class Program
     /// </summary>
     private static void StopStreaming()
     {
-        _StreamingCTS?.Cancel();
-        _StreamingTask?.Wait();
-        _StreamingCTS?.Dispose();
-        _StreamingCTS = null;
-    }
-
-    /// <summary>
-    /// Streams to the console
-    /// </summary>
-    /// <param name="token"></param>
-    private static void Stream(CancellationToken token)
-    {
-        var table = new Table();
-        table.AddColumn(new TableColumn("Account").NoWrap().Width(48));
-        table.AddColumn(new TableColumn("Device").NoWrap().Width(48));
-        table.AddColumn(new TableColumn("State").NoWrap().Width(10));
-        table.AddColumn(new TableColumn("Stable").NoWrap().Width(10));
-        table.AddColumn(new TableColumn("Polite").NoWrap().Width(10));
-        table.AddColumn(new TableColumn("Latency").NoWrap().Width(15));
-
-        bool isConsoleCleared = false;
-
-        AnsiConsole.Clear();
-        AnsiConsole.Live(new Rows(
-                new Markup("\n"), // Adding space between the text and the table
-                new Markup("\n"), // Adding space between the text and the table
-                new Markup("[bold yellow]\n\nCryptopia Node[/]").Centered(),
-                new Markup("\n"), // Adding space between the text and the table
-                new Markup("\n"), // Adding space between the text and the table
-                new Markup($"[bold yellow]0 account(s) connected[/]"),
-                table
-            ))
-            .AutoClear(true)
-            .Start(ctx =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    // Clear the table before updating
-                    table.Rows.Clear();
-
-                    var channels = ChannelManager.Instance.GetChannels();
-                    var totalAccounts = channels.Count;
-                    if (totalAccounts == 0)
-                    {
-                        table.AddEmptyRow();
-                    }
-                    else
-                    {
-                        foreach (var accountChannels in channels)
-                        {
-                            var account = accountChannels.Key;
-                            foreach (var channel in accountChannels.Value.Values)
-                            {
-                                var state = channel.State.ToString();
-                                var isStable = channel.IsStable ? "[green]Yes[/]" : "[red]No[/]";
-                                var isPolite = channel.IsPolite ? "[green]Yes[/]" : "[red]No[/]";
-                                var latencyColor = channel.Latency > channel.MaxLatency ? "red" : "green";
-                                table.AddRow(account, channel.DestinationSigner.Address, state, isStable, isPolite, $"[{latencyColor}]{channel.Latency} ms[/]");
-                            }
-                        }
-                    }
-
-                    ctx.UpdateTarget(new Rows(
-                        new Markup("\n"), // Adding space between the text and the table
-                        new Markup("\n"), // Adding space between the text and the table
-                        new FigletText("Cryptopia Node").Centered().Color(Color.White),
-                        new Markup("\n"), // Adding space between the text and the table
-                        new Markup("\n"), // Adding space between the text and the table
-                        new Markup($"[bold yellow]{totalAccounts} account(s) connected[/]"),
-                        table
-                    ));
-
-                    Thread.Sleep(100);
-                }
-
-                Thread.Sleep(100); // Allow the console to clear
-                isConsoleCleared = true;
-            });
-
-        while (!isConsoleCleared)
-        {
-            Thread.Sleep(10);
-        }
+        _StreamingService.Stop();
     }
 
     /// <summary>
@@ -459,94 +432,32 @@ public class Program
     }
 
     /// <summary>
-    /// Display the version information
+    /// Called when there is a parsing error
     /// </summary>
+    /// <param name="errs"></param>
     /// <returns></returns>
-    private static int RunVersionCommand()
+    private static int HandleParseError(IEnumerable<Error> errs)
     {
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        AnsiConsole.MarkupLine($"[bold yellow]Cryptopia Node Version {version}[/]");
-        return 0;
-    }
-
-    /// <summary>
-    /// Display the status information
-    /// </summary>
-    /// <returns></returns>
-    private static int RunStatusCommand()
-    {
-        var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
-        var channelCount = ChannelManager.Instance.GetChannelCount();
-        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
-
-        var table = new Table();
-        table.AddColumn("Info");
-        table.AddColumn("Value");
-
-        table.AddRow("WebSocket server port", port);
-        table.AddRow("Connected accounts", channelCount.ToString());
-
-        AnsiConsole.Write(table);
-
-        return 0;
-    }
-
-    /// <summary>
-    /// Enable streaming
-    /// </summary>
-    /// <returns></returns>
-    private static int RunStreamCommand()
-    {
-        SetMode(Mode.Stream);
-        return 0;
-    }
-
-    /// <summary>
-    /// Display all connected channels
-    /// </summary>
-    /// <param name="all"></param>
-    /// <returns></returns>
-    private static int RunListCommand(bool all)
-    {
-        var channels = ChannelManager.Instance.GetChannels();
-
-        var table = new Table();
-        table.AddColumn(new TableColumn("Account").NoWrap().Width(48));
-        table.AddColumn(new TableColumn("Device").NoWrap().Width(48));
-        table.AddColumn(new TableColumn("State").NoWrap().Width(10));
-        table.AddColumn(new TableColumn("Stable").NoWrap().Width(10));
-        table.AddColumn(new TableColumn("Polite").NoWrap().Width(10));
-        table.AddColumn(new TableColumn("Latency").NoWrap().Width(15));
-
-        foreach (var accountChannels in channels)
+        foreach (var error in errs)
         {
-            var account = accountChannels.Key;
-            foreach (var channel in accountChannels.Value.Values)
-            {
-                var state = channel.State.ToString();
-                var isStable = channel.IsStable ? "[green]Yes[/]" : "[red]No[/]";
-                var isPolite = channel.IsPolite ? "[green]Yes[/]" : "[red]No[/]";
-                var latencyColor = channel.Latency > channel.MaxLatency ? "red" : "green";
-                table.AddRow(account, channel.DestinationSigner.Address, state, isStable, isPolite, $"[{latencyColor}]{channel.Latency} ms[/]");
-            }
+            Console.WriteLine(error.ToString());
         }
 
-        AnsiConsole.Write(table);
-
-        return 0;
+        return 1;
     }
 
     /// <summary>
     /// Exit the application
     /// </summary>
     /// <returns></returns>
-    private static int RunExitCommand()
+    public static void Exit()
     {
         try
         {
             _Server?.Stop();
             StopListening();
             StopStreaming();
+            _StreamingService.Dispose();
         }
         catch (Exception ex)
         {
@@ -562,22 +473,6 @@ public class Program
                 Monitor.PulseAll(_InputLock);
             }
         }
-
-        return 0;
-    }
-
-    /// <summary>
-    /// Called when there is a parsing error
-    /// </summary>
-    /// <param name="errs"></param>
-    /// <returns></returns>
-    private static int HandleParseError(IEnumerable<Error> errs)
-    {
-        foreach (var error in errs)
-        {
-            Console.WriteLine(error.ToString());
-        }
-        return 1;
     }
 
     /// <summary>

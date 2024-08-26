@@ -1,6 +1,6 @@
 ﻿using Newtonsoft.Json;
 
-namespace Cryptopia.Node.RTC
+namespace Cryptopia.Node.RTC.Messages
 {
     public class RTCReceiver
     {
@@ -9,5 +9,16 @@ namespace Cryptopia.Node.RTC
 
         [JsonProperty("signer")]
         public required string Signer;
+
+        /// <summary>
+        /// True if the receiver is a node.
+        /// </summary>
+        public bool IsNode
+        {
+            get
+            {
+                return Account == "node";
+            }
+        }
     }
 }

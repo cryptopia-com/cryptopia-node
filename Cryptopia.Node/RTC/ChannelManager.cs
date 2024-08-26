@@ -1,4 +1,11 @@
 ﻿using System.Collections.Concurrent;
+using Cryptopia.Node.RTC.Channels;
+using Cryptopia.Node.RTC.Channels.Concrete;
+using Cryptopia.Node.RTC.Channels.Concrete.Config.ICE;
+using Cryptopia.Node.RTC.Extensions;
+using Cryptopia.Node.RTC.Messages;
+using Cryptopia.Node.RTC.Signalling;
+using Cryptopia.Node.Services.Logging;
 
 namespace Cryptopia.Node.RTC
 {
@@ -30,95 +37,78 @@ namespace Cryptopia.Node.RTC
         private readonly object _DisposeLock = new object();
 
         /// <summary>
+        /// Dictionary to store node channels
+        /// </summary>
+        private ConcurrentDictionary<string, INodeChannel> _NodeChannels = new ConcurrentDictionary<string, INodeChannel>();
+
+        /// <summary>
         /// Dictionary to store account channels
         /// </summary>
-        private ConcurrentDictionary<string, ConcurrentDictionary<string, IAccountChannel>> _Channels = new ConcurrentDictionary<string, ConcurrentDictionary<string, IAccountChannel>>();
+        private ConcurrentDictionary<string, ConcurrentDictionary<string, IAccountChannel>> _AccountChannels = new ConcurrentDictionary<string, ConcurrentDictionary<string, IAccountChannel>>();
+
+        #region "Node Channels"
 
         /// <summary>
-        /// Returns true if the account has at least one channel
+        /// Returns true if the specified signer is associated with a known node
         /// </summary>
-        /// <param name="account">Registered smart-contract address</param>
+        /// <param name="signer">Node signer</param>
         /// <returns></returns>
-        public bool IsKnown(string account)
-        { 
-            return _Channels.ContainsKey(account);
-        }
-
-        /// <summary>
-        /// Returns true if the account has a channel with the specified signer
-        /// </summary>
-        /// <param name="account">Registered smart-contract address</param>
-        /// <param name="signer">An ower of the smart-contact account</param>
-        /// <returns></returns>
-        public bool IsKnown(string account, string signer)
+        public bool IsKnownNode(string signer)
         {
-            if (!IsKnown(account))
-            {
-                return false;
-            }
-
-            return _Channels[account].ContainsKey(signer);
+            return _NodeChannels.ContainsKey(signer);
         }
 
         /// <summary>
-        /// Returns the total number of channels
+        /// Returns the total number of channels to nodes
         /// </summary>
         /// <returns></returns>
-        public int GetChannelCount()
+        public int GetNodeChannelCount()
         {
-            return _Channels.Keys.Count;
+            return _NodeChannels.Keys.Count;
         }
 
         /// <summary>
-        /// Returns the channels
+        /// Returns all channels to nodes
         /// </summary>
         /// <returns></returns>
-        public IDictionary<string, IDictionary<string, IAccountChannel>> GetChannels()
+        public IDictionary<string, INodeChannel> GetNodeChannels()
         {
             // Copy the channels
-            return _Channels.ToDictionary(
-                x => x.Key, x => x.Value.ToDictionary(
-                    y => y.Key, y => y.Value) as IDictionary<string, IAccountChannel>);
+            return _NodeChannels.ToDictionary(x => x.Key, x => x.Value);
         }
 
         /// <summary>
-        /// Returns the channels for the specified account
+        /// Returns the channel for the specified node 
         /// </summary>
-        /// <param name="account">Registered smart-contract address</param>
+        /// <param name="signer">Signer associated with the node</param></param>
         /// <returns></returns>
-        public IAccountChannel[] GetChannels(string account)
+        public INodeChannel GetNodeChannel(string signer)
         {
-            return _Channels[account].Values.ToArray();
+            return _NodeChannels[signer];
         }
 
         /// <summary>
-        /// Returns the channel for the specified account and signer
+        /// Creates a new channel to the specified node
         /// </summary>
-        /// <param name="account">Registered smart-contract address</param>
-        /// <param name="signer">An ower of the smart-contact account</param></param>
-        /// <returns></returns>
-        public IAccountChannel GetChannel(string account, string signer)
-        {
-            return _Channels[account][signer];
-        }
-
-        /// <summary>
-        /// Creates a new channel to the specified account and signer
-        /// </summary>
-        /// <param name="account">Registered smart-contract address</param>
         /// <param name="signer">Signer</param></param>
         /// <param name="signalling">Signalling server</param></param>
         /// <returns></returns>
-        public IAccountChannel CreateChannel(string account, string signer, ISignallingService signalling)
+        public INodeChannel CreateNodeChannel(string signer, ISignallingService signalling)
         {
-            var channel = new AccountChannel(
+            if (null == AccountManager.Instance.Signer)
+            {
+                var exception = new ArgumentNullException("Signer is not set");
+                LoggingService?.LogException(exception);
+                throw exception;
+            }
+
+            var channel = new NodeChannel(
                 true, // Polite
                 false, // Not initiated by us
                 LoggingService,
                 signalling,
-                new LocalAccount("0x"),
-                new LocalAccount(signer),
-                new RegisteredAccount(account, "Unknown"))
+                AccountManager.Instance.Signer,
+                new ExternalAccount(signer))
             .StartPeerConnection([
                 new ICEServerConfig()
                 {
@@ -126,50 +116,36 @@ namespace Cryptopia.Node.RTC
                 }]);
 
             // Subscribe  to events
-            channel.OnMessage += OnChannelMessage;
+            channel.OnMessage += OnAccountChannelMessage;
             channel.OnStable += (sender, args) => channel.StartHeartbeat();
-            channel.OnTimeout += (sender, args) => RemoveChannel(account, signer, true);
-            channel.OnDispose += (sender, args) => RemoveChannel(account, signer, false);
-            
-            // Store in memory
-            if (!_Channels.ContainsKey(account))
-            {
-                _Channels[account] = new ConcurrentDictionary<string, IAccountChannel>();
-            }
+            channel.OnTimeout += (sender, args) => RemoveNodeChannel(signer, true);
+            channel.OnDispose += (sender, args) => RemoveNodeChannel(signer, false);
 
-            _Channels[account][signer] = channel;
+            // Store in memory
+            _NodeChannels[signer] = channel;
             return channel;
         }
 
         /// <summary>
         /// Removes the channel from the dictionary
         /// </summary>
-        /// <param name="account"></param>
         /// <param name="signer"></param>
         /// <param name="dispose"></param>
-        private void RemoveChannel(string account, string signer, bool dispose)
+        private void RemoveNodeChannel(string signer, bool dispose)
         {
-            if (_Channels.TryGetValue(account, out var channels))
+            _NodeChannels.TryRemove(signer, out var channel);
+            if (dispose)
             {
-                channels.TryRemove(signer, out var channel);
-                if (dispose)
-                {
-                    channel?.Dispose();
-                }
-
-                if (channels.IsEmpty)
-                {
-                    _Channels.TryRemove(account, out _);
-                }
+                channel?.Dispose();
             }
         }
 
         /// <summary>
-        /// Handles the channel message
+        /// Handles a node channel message
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="envelope"></param>
-        private void OnChannelMessage(object? sender, RTCMessageEnvelope envelope)
+        private void OnNodeChannelMessage(object? sender, RTCMessageEnvelope envelope)
         {
             switch (envelope.Payload.Type)
             {
@@ -183,6 +159,169 @@ namespace Cryptopia.Node.RTC
                     break;
             }
         }
+
+        #endregion
+
+        #region "Account Channels"
+
+        /// <summary>
+        /// Returns true if the account has at least one channel
+        /// </summary>
+        /// <param name="account">Registered smart-contract address</param>
+        /// <returns></returns>
+        public bool IsKnownAccount(string account)
+        {
+            return _AccountChannels.ContainsKey(account);
+        }
+
+        /// <summary>
+        /// Returns true if the account has a channel with the specified signer
+        /// </summary>
+        /// <param name="account">Registered smart-contract address</param>
+        /// <param name="signer">An ower of the smart-contact account</param>
+        /// <returns></returns>
+        public bool IsKnownAccountSigner(string account, string signer)
+        {
+            if (!IsKnownAccount(account))
+            {
+                return false;
+            }
+
+            return _AccountChannels[account].ContainsKey(signer);
+        }
+
+        /// <summary>
+        /// Returns the total number of channels
+        /// </summary>
+        /// <returns></returns>
+        public int GetAccountChannelCount()
+        {
+            return _AccountChannels.Keys.Count;
+        }
+
+        /// <summary>
+        /// Returns the channels
+        /// </summary>
+        /// <returns></returns>
+        public IDictionary<string, IDictionary<string, IAccountChannel>> GetAccountChannels()
+        {
+            // Copy the channels
+            return _AccountChannels.ToDictionary(
+                x => x.Key, x => x.Value.ToDictionary(
+                    y => y.Key, y => y.Value) as IDictionary<string, IAccountChannel>);
+        }
+
+        /// <summary>
+        /// Returns the channels for the specified account
+        /// </summary>
+        /// <param name="account">Registered smart-contract address</param>
+        /// <returns></returns>
+        public IAccountChannel[] GetAccountChannels(string account)
+        {
+            return _AccountChannels[account].Values.ToArray();
+        }
+
+        /// <summary>
+        /// Returns the channel for the specified account and signer
+        /// </summary>
+        /// <param name="account">Registered smart-contract address</param>
+        /// <param name="signer">An ower of the smart-contact account</param></param>
+        /// <returns></returns>
+        public IAccountChannel GetAccountChannel(string account, string signer)
+        {
+            return _AccountChannels[account][signer];
+        }
+
+        /// <summary>
+        /// Creates a new channel to the specified account and signer
+        /// </summary>
+        /// <param name="account">Registered smart-contract address</param>
+        /// <param name="signer">Signer</param></param>
+        /// <param name="signalling">Signalling server</param></param>
+        /// <returns></returns>
+        public IAccountChannel CreateAccountChannel(string account, string signer, ISignallingService signalling)
+        {
+            if (null == AccountManager.Instance.Signer)
+            {
+                var exception = new ArgumentNullException("Signer is not set");
+                LoggingService?.LogException(exception);
+                throw exception;
+            }
+
+            var channel = new AccountChannel(
+                true, // Polite
+                false, // Not initiated by us
+                LoggingService,
+                signalling,
+                AccountManager.Instance.Signer,
+                new ExternalAccount(signer),
+                new RegisteredAccount(account, "Unknown"))
+            .StartPeerConnection([
+                new ICEServerConfig()
+                {
+                    Urls = "stun:stun.l.google.com:19302"
+                }]);
+
+            // Subscribe  to events
+            channel.OnMessage += OnAccountChannelMessage;
+            channel.OnStable += (sender, args) => channel.StartHeartbeat();
+            channel.OnTimeout += (sender, args) => RemoveAccountChannel(account, signer, true);
+            channel.OnDispose += (sender, args) => RemoveAccountChannel(account, signer, false);
+
+            // Store in memory
+            if (!_AccountChannels.ContainsKey(account))
+            {
+                _AccountChannels[account] = new ConcurrentDictionary<string, IAccountChannel>();
+            }
+
+            _AccountChannels[account][signer] = channel;
+            return channel;
+        }
+
+        /// <summary>
+        /// Removes the channel from the dictionary
+        /// </summary>
+        /// <param name="account"></param>
+        /// <param name="signer"></param>
+        /// <param name="dispose"></param>
+        private void RemoveAccountChannel(string account, string signer, bool dispose)
+        {
+            if (_AccountChannels.TryGetValue(account, out var channels))
+            {
+                channels.TryRemove(signer, out var channel);
+                if (dispose)
+                {
+                    channel?.Dispose();
+                }
+
+                if (channels.IsEmpty)
+                {
+                    _AccountChannels.TryRemove(account, out _);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles the channel message
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="envelope"></param>
+        private void OnAccountChannelMessage(object? sender, RTCMessageEnvelope envelope)
+        {
+            switch (envelope.Payload.Type)
+            {
+                case RTCMessageType.Relay:
+                    RelayChannelMessage(envelope);
+                    break;
+                case RTCMessageType.Broadcast:
+                    BroadcastChannelMessage(envelope);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// Relays the message to the specified channel
@@ -199,7 +338,7 @@ namespace Cryptopia.Node.RTC
         /// <param name="envelope"></param>
         private void BroadcastChannelMessage(RTCMessageEnvelope envelope)
         {
-            var channels = _Channels.Values.SelectMany(x => x.Values);
+            var channels = _AccountChannels.Values.SelectMany(x => x.Values);
             foreach (var channel in channels)
             {
                 // Exclude the sender
@@ -208,8 +347,8 @@ namespace Cryptopia.Node.RTC
                     continue;
                 }
 
-                try 
-                { 
+                try
+                {
                     channel.Send(envelope.Serialize());
                 }
                 catch (Exception)
@@ -237,7 +376,7 @@ namespace Cryptopia.Node.RTC
             {
                 return;
             }
-                
+
             lock (_DisposeLock)
             {
                 if (_Disposed)
@@ -248,7 +387,7 @@ namespace Cryptopia.Node.RTC
                 if (disposing)
                 {
                     // Dispose all channels
-                    foreach (var accountChannels in _Channels.Values)
+                    foreach (var accountChannels in _AccountChannels.Values)
                     {
                         foreach (var channel in accountChannels.Values)
                         {
@@ -263,7 +402,7 @@ namespace Cryptopia.Node.RTC
                             }
                         }
                     }
-                    _Channels.Clear();
+                    _AccountChannels.Clear();
 
                     // Dispose the logging service
                     if (null != LoggingService)
