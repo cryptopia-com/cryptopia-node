@@ -133,7 +133,7 @@ namespace Cryptopia.Node.RPC
             }
 
             // Check receiver (us)
-            if (!AccountManager.Instance.IsSigner(message.Receiver.Account))
+            if (!AccountManager.Instance.IsSigner(message.Receiver.Signer))
             {
                 LoggingService?.LogError(
                     "Receiver account not registered as node signer",
