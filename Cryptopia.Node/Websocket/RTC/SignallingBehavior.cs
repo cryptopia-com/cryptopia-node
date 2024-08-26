@@ -90,7 +90,10 @@ namespace Cryptopia.Node.RPC
 
                 if (message.Payload.Type == RTCMessageType.Offer)
                 {
-                    HandleOfferMessage(message);
+                    _ = Task.Run(async () =>
+                    {
+                        await HandleOfferMessageAsync(message);
+                    });
                 }
 
                 else
@@ -103,7 +106,7 @@ namespace Cryptopia.Node.RPC
         /// <summary>
         /// Handles incoming offer messages asynchronously
         /// </summary>
-        private async void HandleOfferMessage(RTCMessageEnvelope message)
+        private async Task HandleOfferMessageAsync(RTCMessageEnvelope message)
         {
             var payload = (RTCOfferMessage)message.Payload;
             var offer = payload.Offer;
