@@ -62,8 +62,9 @@ jobs:
 
           # Remove old environment file and create a new one
           rm -f .env
-          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" > .env
-          echo "PUBLIC_IP=${SERVER_IP}" >> .env
+          echo "PUBLIC_IP=${SERVER_IP}" > .env
+          echo "PRIVATE_KEY=${PRIVATE_KEY}" > .env
+          echo "APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}" >> .env
           
           # Fetch the latest changes from the repository and update the local repository
           git fetch origin
