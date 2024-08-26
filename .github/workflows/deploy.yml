@@ -31,13 +31,15 @@ jobs:
     - name: Deploy to Droplet
       env:
         SERVER_IP: ${{ secrets.DIGITALOCEAN_SERVER_IP }}
+        PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
         APPLICATION_INSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATION_INSIGHTS_CONNECTION_STRING }}
       run: |
         # Connect to the server using SSH
         ssh -o StrictHostKeyChecking=no root@$SERVER_IP << EOF
           # Export environment variables
-          export APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}
           export PUBLIC_IP=${SERVER_IP}
+          export PRIVATE_KEY=${PRIVATE_KEY}
+          export APPLICATION_INSIGHTS_CONNECTION_STRING=${APPLICATION_INSIGHTS_CONNECTION_STRING}
           
           # Navigate to the application directory
           cd /root/cryptopia-node
