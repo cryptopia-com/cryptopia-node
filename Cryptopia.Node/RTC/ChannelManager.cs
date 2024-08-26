@@ -284,7 +284,7 @@ namespace Cryptopia.Node.RTC
         /// <param name="account"></param>
         /// <param name="signer"></param>
         /// <param name="dispose"></param>
-        private void RemoveAccountChannel(string account, string signer, bool dispose)
+        private void RemoveChannel(string account, string signer, bool dispose)
         {
             if (_AccountChannels.TryGetValue(account, out var channels))
             {
