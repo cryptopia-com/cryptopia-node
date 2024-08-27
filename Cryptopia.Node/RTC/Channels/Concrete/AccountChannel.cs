@@ -52,6 +52,33 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         }
 
         /// <summary>
+        /// Gather channel data for logging
+        /// </summary>
+        /// <returns></returns>
+        protected override IDictionary<string, string> GatherChannelData()
+        {
+            return new Dictionary<string, string>
+            {
+                { "type", "Account Channel" },
+                { "Node", OriginSigner.Address },
+                { "Signer", DestinationSigner.Address },
+                { "Account", DestinationAccount.Address }
+            };
+        }
+
+        /// <summary>
+        /// Sends an SDP offer
+        /// 
+        /// Transmits an SDP offer to the remote peer to initiate the WebRTC handshake
+        /// </summary>
+        /// <param name="offer">The SDP offer to send</param>
+        /// <returns></returns>
+        protected override void SendOffer(SDPInfo offer)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
         /// Sends an SDP answer
         /// 
         /// Transmits an SDP answer to the remote peer to complete the WebRTC handshake
@@ -80,7 +107,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 {
                     Answer = answer
                 }
-            }.Sign("PRIVATE_KEY"));
+            });
         }
 
         /// <summary>
@@ -187,12 +214,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             base.OnHeartbeatTimeoutDetected();
 
             // Log the timeout
-            LoggingService?.LogError("Heartbeat timeout", new Dictionary<string, string>
-            {
-                { "node", OriginSigner.Address },
-                { "account", DestinationAccount.Address },
-                { "signer", DestinationSigner.Address }
-            });
+            LoggingService?.LogError(
+                "Heartbeat timeout", GatherChannelData());
         }
 
         /// <summary>
@@ -204,13 +227,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             base.OnHighLatencyDetected(latency);
 
             // Log the high latency
-            LoggingService?.LogWarning("High latency detected", new Dictionary<string, string>
-            {
-                { "node", OriginSigner.Address },
-                { "account", DestinationAccount.Address },
-                { "signer", DestinationSigner.Address },
-                { "latency", latency.ToString() }
-            });
-        }
+            var data = GatherChannelData();
+            data.Add("latency", latency.ToString());
+            LoggingService?.LogWarning("High latency detected", data);
+        }  
     }
 }

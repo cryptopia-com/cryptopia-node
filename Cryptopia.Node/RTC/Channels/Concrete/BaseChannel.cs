@@ -7,6 +7,7 @@ using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
 using Cryptopia.Node.Services.Logging;
 using SIPSorcery.Net;
+using System.Threading;
 using System.Timers;
 
 namespace Cryptopia.Node.RTC.Channels.Concrete
@@ -278,7 +279,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 if (null != _PeerConnection)
                 {
                     var exception = new InvalidOperationException("Peer connection already initialized");
-                    LoggingService?.LogException(exception);
+                    LoggingService?.LogException(exception, GatherChannelData());
                     throw exception;
                 }
 
@@ -293,7 +294,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             {
                 if (channel == null || string.IsNullOrEmpty(channel.label))
                 {
-                    LoggingService?.LogError("Received a data channel with no label");
+                    LoggingService?.LogError(
+                        "Received a data channel with no label", GatherChannelData());
                     return;
                 }
 
@@ -308,7 +310,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         break;
 
                     default:
-                        LoggingService?.LogError($"Received an unknown channel: {channel.label}");
+                        LoggingService?.LogError(
+                            $"Received an unknown channel: {channel.label}", GatherChannelData());
                         break;
                 }
             };
@@ -326,7 +329,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (null == _PeerConnection)
             {
                 var exception = new InvalidOperationException("Peer connection not initialized");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
@@ -335,7 +338,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 if (null != _HeartbeatTimer)
                 {
                     var exception = new InvalidOperationException("Heartbeat already started");
-                    LoggingService?.LogException(exception);
+                    LoggingService?.LogException(exception, GatherChannelData());
                     throw exception;
                 }
 
@@ -418,7 +421,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (signallingTimerAlreadyStarted)
             {
                 var exception = new InvalidOperationException("Signalling timer already started");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
         }
@@ -458,7 +461,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         if (_State != ChannelState.Connecting)
                         {
                             var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
-                            LoggingService?.LogException(exception);
+                            LoggingService?.LogException(exception, GatherChannelData());
                             throw exception;
                         }
 
@@ -498,7 +501,187 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <returns></returns>
         public async Task OpenAsync()
         {
+            var state_ = State;
+            if (state_ != ChannelState.Initiating)
+            {
+                if (state_ == ChannelState.Open)
+                {
+                    LoggingService?.LogWarning(
+                        "Channel already open", GatherChannelData());
+                    return;
+                }
+
+                else if (state_ == ChannelState.Rejected)
+                {
+                    if (IsPolite)
+                    {
+                        LoggingService?.LogWarning(
+                            "Connection was rejected", GatherChannelData());
+                        return;
+                    }
+
+                    // Allow
+                    LoggingService?.LogInfo(
+                        "Opening a rejected connection", GatherChannelData());
+                }
+
+                else if (state_ == ChannelState.Closed)
+                {
+                    // Allow
+                    LoggingService?.LogInfo(
+                        "Opening a closed connection", GatherChannelData());
+
+                    if (_PeerConnection != null && 
+                        _PeerConnection.connectionState == RTCPeerConnectionState.connected &&
+                        _PeerConnection.iceConnectionState == RTCIceConnectionState.connected)
+                    {
+                        // TODO: Start signalling timer?
+
+                        // Create data channel
+                        var peerConnection = await _PeerConnection.createDataChannel(
+                            DATA_CHANNEL_LABEL);
+                        SetDataChannel(peerConnection);
+
+                        // Wait 
+                        while (State != ChannelState.Connecting && State != ChannelState.Signalling)
+                        {
+                            await Task.Delay(100);
+                        }
+
+                        return;
+                    }
+
+                    else
+                    {
+                        var loggingData = GatherChannelData();
+                        if (null != _PeerConnection)
+                        {
+                            loggingData.Add("Connection state", _PeerConnection.connectionState.ToString());
+                            loggingData.Add("ICE connection state", _PeerConnection.iceConnectionState.ToString());
+                        }
+
+                        LoggingService?.LogWarning("Connection not stable", loggingData);
+                    }
+                }
+
+                else if (state_ == ChannelState.Failed)
+                {
+                    // Allow 
+                    LoggingService?.LogInfo(
+                        "Opening a failed connection", GatherChannelData());
+                }
+
+                else if (state_ == ChannelState.Connecting || state_ == ChannelState.Signalling)
+                {
+                    // Wait 
+                    while (State == ChannelState.Connecting || State == ChannelState.Signalling)
+                    {
+                        await Task.Delay(100);
+                    }
+
+                    return;
+                }
+            }
+
+            // Detect signalling timeout
+            StartSignallingTimer();
+
+            // Connect to signalling server
             await ConnectAsync();
+
+            // Indicate signalling started
+            bool shouldNotifyChange;
+            lock (_ChannelLock)
+            {
+                if (IsDisposedOrDisposing())
+                {
+                    return;
+                }
+
+                if (_State != ChannelState.Connecting)
+                {
+                    var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                    LoggingService?.LogException(exception, GatherChannelData());
+                    throw exception;
+                }
+
+                SetState(
+                    ChannelState.Signalling,
+                    out shouldNotifyChange,
+                    out bool shouldNotifyOpen);
+            }
+
+            // Notify change
+            if (shouldNotifyChange)
+            {
+                OnStateChange?.Invoke(this, ChannelState.Signalling);
+            }
+
+            // Create and send offer
+            await OfferAsync();
+        }
+
+        /// <summary>
+        /// Creates and sends an SDP offer
+        /// 
+        /// Initiates the WebRTC handshake by creating and sending an offer to the remote peer
+        /// </summary>
+        /// <returns></returns>
+        private async Task OfferAsync()
+        {
+            // Enforce signalling state
+            lock (_ChannelLock)
+            {
+                if (IsDisposedOrDisposing())
+                {
+                    return;
+                }
+
+                if (_State != ChannelState.Signalling)
+                {
+                    var exception = new InvalidOperationException("Offer can only be created in the signalling state");
+                    LoggingService?.LogException(exception, GatherChannelData());
+                    throw exception;
+                }
+            }
+
+            if (null == _PeerConnection)
+            {
+                var exception = new InvalidOperationException("Peer connection not initialized");
+                LoggingService?.LogException(exception, GatherChannelData());
+                throw exception;
+            }
+
+            // Create channels
+            SetDataChannel(await _PeerConnection.createDataChannel(DATA_CHANNEL_LABEL));
+            SetCommandChannel(await _PeerConnection.createDataChannel(COMMAND_CHANNEL_LABEL));
+
+            // Create offer
+            var offer = _PeerConnection.createOffer();
+            await _PeerConnection.setLocalDescription(offer);
+
+            // Assert signalling state
+            lock (_ChannelLock)
+            {
+                if (IsDisposedOrDisposing())
+                {
+                    return;
+                }
+
+                if (_State != ChannelState.Signalling)
+                {
+                    var exception = new InvalidOperationException($"Expected {ChannelState.Signalling} state instead of {_State} state");
+                    LoggingService?.LogException(exception, GatherChannelData());
+                    throw exception;
+                }
+            }
+
+            // Send offer
+            SendOffer(new SDPInfo()
+            {
+                Type = offer.type.ToString(),
+                SDP = offer.sdp
+            });
         }
 
         /// <summary>
@@ -513,14 +696,14 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (IsInitiatedByUs)
             {
                 var exception = new InvalidOperationException("Channel initiated by us");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
             if (State != ChannelState.Initiating)
             {
                 var exception = new InvalidOperationException("Offer can only be accepted in the initiating state");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
@@ -542,7 +725,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 if (_State != ChannelState.Connecting)
                 {
                     var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
-                    LoggingService?.LogException(exception);
+                    LoggingService?.LogException(exception, GatherChannelData());
                     throw exception;
                 }
 
@@ -569,7 +752,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (null == _PeerConnection)
             {
                 var exception = new InvalidOperationException("Peer connection not initialized");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
@@ -590,7 +773,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 if (_State != ChannelState.Signalling)
                 {
                     var exception = new InvalidOperationException($"Expected {ChannelState.Signalling} state instead of {_State} state");
-                    LoggingService?.LogException(exception);
+                    LoggingService?.LogException(exception, GatherChannelData());
                     throw exception;
                 }
             }
@@ -640,7 +823,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             {
                 if (_State != ChannelState.Open)
                 {
-                    LoggingService?.LogWarning("Channel is not open");
+                    LoggingService?.LogWarning(
+                        "Channel is not open", GatherChannelData());
                     return;
                 }
 
@@ -712,7 +896,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (State != ChannelState.Open || null == _DataChannel)
             {
                 var exception = new InvalidOperationException("Channel not open");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
@@ -731,7 +915,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (null == _CommandChannel)
             {
                 var exception = new InvalidOperationException("Channel not open");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
@@ -762,7 +946,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (null == _CommandChannel)
             {
                 var exception = new InvalidOperationException("Channel not open");
-                LoggingService?.LogException(exception);
+                LoggingService?.LogException(exception, GatherChannelData());
                 throw exception;
             }
 
@@ -930,7 +1114,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         {
             if (null != _DataChannel)
             {
-                LoggingService?.LogError("Data channel already set");
+                LoggingService?.LogError(
+                    "Data channel already set", GatherChannelData());
                 return;
             }
 
@@ -992,7 +1177,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         {
             if (null != _CommandChannel)
             {
-                LoggingService?.LogError("Command channel already set");
+                LoggingService?.LogError(
+                    "Command channel already set", GatherChannelData());
                 return;
             }
 
@@ -1016,13 +1202,15 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         {
             if (null == _PeerConnection)
             {
-                LoggingService?.LogError("Peer connection not initizlized");
+                LoggingService?.LogError(
+                    "Peer connection not initizlized", GatherChannelData());
                 return;
             }
 
             if (candidate == null || string.IsNullOrEmpty(candidate.Candidate))
             {
-                LoggingService?.LogError("Invalid ICE candidate");
+                LoggingService?.LogError(
+                    "Invalid ICE candidate", GatherChannelData());
                 return;
             }
 
@@ -1184,7 +1372,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         {
             if (candidate == null || string.IsNullOrEmpty(candidate.candidate))
             {
-                LoggingService?.LogError("Invalid ICE candidate");
+                LoggingService?.LogError(
+                    "Invalid ICE candidate", GatherChannelData());
                 return;
             }
 
@@ -1299,7 +1488,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <param name="error">The error that occurred</param>
         protected virtual void OnCommandChannelError(string error)
         {
-            LoggingService?.LogError(error);
+            LoggingService?.LogError(error, GatherChannelData());
             State = ChannelState.Failed;
         }
 
@@ -1316,7 +1505,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             var message = System.Text.Encoding.UTF8.GetString(bytes);
             if (!message.TryParseEnum<ChannelCommand>(out var command))
             {
-                LoggingService?.LogWarning($"Received unknown command: {message}");
+                LoggingService?.LogWarning(
+                    $"Received unknown command: {message}", GatherChannelData());
                 return;
             }
 
@@ -1332,7 +1522,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     break;
 
                 case ChannelCommand.Close:
-                    Task.Run(() => CloseAsync(false));
+                    _ = Task.Run(() => CloseAsync(false));
                     break;
 
                 case ChannelCommand.Dispose:
@@ -1369,7 +1559,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <param name="error">The error that occurred</param>
         protected virtual void OnDataChannelError(string error)
         {
-            LoggingService?.LogError(error);
+            LoggingService?.LogError(error, GatherChannelData());
             State = ChannelState.Failed;
         }
 
@@ -1388,14 +1578,14 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             // Check if ping
             if (message.Equals("ping", StringComparison.InvariantCultureIgnoreCase))
             {
-                LoggingService?.Log($">: pong");
+                LoggingService?.Log($">: pong", GatherChannelData());
                 Send("pong");
             }
 
             // Echo message
             else if (message.StartsWith("echo:", StringComparison.InvariantCultureIgnoreCase))
             {
-                LoggingService?.Log($">: {message.Substring("echo:".Length).TrimStart()}");
+                LoggingService?.Log($">: {message.Substring("echo:".Length).TrimStart()}", GatherChannelData());
                 Send(message);
             }
 
@@ -1405,7 +1595,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 // Assert
                 if (null == envelope)
                 {
-                    LoggingService?.LogError("Failed to deserialize message");
+                    LoggingService?.LogError(
+                        "Failed to deserialize message", GatherChannelData());
                     return;
                 }
 
@@ -1417,7 +1608,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             }
             else
             {
-                LoggingService?.LogError("Failed to deserialize message");
+                LoggingService?.LogError(
+                    "Failed to deserialize message", GatherChannelData());
             }
         }
 
@@ -1523,6 +1715,21 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
         #endregion
         #region "Abstract methods"
+
+        /// <summary>
+        /// Gathers logging data for the channel
+        /// </summary>
+        /// <returns></returns>
+        protected abstract IDictionary<string, string> GatherChannelData();
+
+        /// <summary>
+        /// Sends an SDP offer
+        /// 
+        /// Transmits an SDP offer to the remote peer to initiate the WebRTC handshake
+        /// </summary>
+        /// <param name="offer">The SDP offer to send</param>
+        /// <returns></returns>
+        protected abstract void SendOffer(SDPInfo offer);
 
         /// <summary>
         /// Sends an SDP answer

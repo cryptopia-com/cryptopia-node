@@ -44,6 +44,53 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         }
 
         /// <summary>
+        /// Gather channel data for logging
+        /// </summary>
+        /// <returns></returns>
+        protected override IDictionary<string, string> GatherChannelData()
+        {
+            return new Dictionary<string, string>
+            {
+                { "type", "Node Channel" },
+                { "origin", OriginSigner.Address },
+                { "destination", DestinationSigner.Address }
+            };
+        }
+
+        /// <summary>
+        /// Sends an SDP offer
+        /// 
+        /// Transmits an SDP offer to the remote peer to initiate the WebRTC handshake
+        /// </summary>
+        /// <param name="offer">The SDP offer to send</param>
+        /// <returns></returns>
+        protected override void SendOffer(SDPInfo offer)
+        {
+            SignallingService.Send(new RTCMessageEnvelope()
+            {
+                Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),
+                MaxAge = 60, // 1 minute
+                Priority = 1,
+                Sequence = 0,
+                Receiver = new RTCReceiver()
+                {
+                    Account = "Node",
+                    Signer = DestinationSigner.Address
+                },
+                Sender = new RTCSender()
+                {
+                    Account = "Node",
+                    Signer = OriginSigner.Address
+                },
+                Payload = new RTCOfferMessage()
+                {
+                    Offer = offer
+                },
+                Signature = ""
+            });
+        }
+
+        /// <summary>
         /// Sends an SDP answer
         /// 
         /// Transmits an SDP answer to the remote peer to complete the WebRTC handshake
@@ -180,11 +227,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             base.OnHeartbeatTimeoutDetected();
 
             // Log the timeout
-            LoggingService?.LogError("Heartbeat timeout", new Dictionary<string, string>
-            {
-                { "node", OriginSigner.Address },
-                { "signer", DestinationSigner.Address }
-            });
+            LoggingService?.LogError(
+                "Heartbeat timeout", GatherChannelData());
         }
 
         /// <summary>
@@ -196,12 +240,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             base.OnHighLatencyDetected(latency);
 
             // Log the high latency
-            LoggingService?.LogWarning("High latency detected", new Dictionary<string, string>
-            {
-                { "node", OriginSigner.Address },
-                { "signer", DestinationSigner.Address },
-                { "latency", latency.ToString() }
-            });
+            var data = GatherChannelData();
+            data.Add("latency", latency.ToString());
+            LoggingService?.LogWarning("High latency detected", data);
         }
     }
 }

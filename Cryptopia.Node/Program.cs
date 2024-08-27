@@ -3,10 +3,13 @@ using Cryptopia.Node;
 using Cryptopia.Node.Commands;
 using Cryptopia.Node.RPC;
 using Cryptopia.Node.RTC;
+using Cryptopia.Node.RTC.Signalling;
+using Cryptopia.Node.RTC.Signalling.WebSocketSharp;
 using Cryptopia.Node.Services.Logging;
 using Cryptopia.Node.Services.Streaming;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security;
 using WebSocketSharp.Server;
 
@@ -59,6 +62,9 @@ public class Program
     {
         [Option("node", Default = false, HelpText = "The endpoint of the node to connect to")]
         public string? Node { get; set; }
+
+        [Option("endpoint", Default = false, HelpText = "The endpoint to connect to")]
+        public string Endpoint { get; set; } = string.Empty;
     }
 
     [Verb("exit", HelpText = "Exit the application")]
@@ -83,6 +89,7 @@ public class Program
     private static WebSocketServer? _Server;
     private static TelemetryClient? _TelemetryClient;
     private static Task? _ListeningTask;
+    private static ServiceProvider? _ServiceProvider;
     private static CancellationTokenSource? _ListeningCTS;
     private static CancellationTokenSource _ApplicationCTS = new CancellationTokenSource();
     private static IStreamingService _StreamingService = new ChannelStreamingService();
@@ -124,37 +131,18 @@ public class Program
     /// <returns></returns>
     private static int Run(bool stream)
     {
-        ILoggingService loggingService;
-
-        // Use Application Insights logging service
-        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
-        if (!string.IsNullOrEmpty(insightsConnectionString))
+        // Setup DI
+        ConfigureServices();
+        if (_ServiceProvider == null)
         {
-            var configuration = TelemetryConfiguration.CreateDefault();
-            configuration.ConnectionString = insightsConnectionString;
-
-            _TelemetryClient = new TelemetryClient(configuration);
-            loggingService = new ApplicationInsightsLoggingService(_TelemetryClient);
-
-            // Use insights to log unhandled exceptions
-            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
-            {
-                _TelemetryClient.TrackException(e.ExceptionObject as Exception);
-                _TelemetryClient.Flush();
-                Thread.Sleep(50);
-            };
+            return 1;
         }
 
-        // Use the default logging service
-        else
-        {
-            loggingService = new AppLoggingService();
-        }
+        // Setup logging
+        var loggingService = _ServiceProvider.GetRequiredService<ILoggingService>();
+        ChannelManager.Instance.LoggingService = loggingService;
 
-        // Listen for process exit
-        AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
-
-        // Setup channel manager
+        // Setup Signer
         var privateKey = new SecureString();
         foreach (var c in Environment.GetEnvironmentVariable("PRIVATE_KEY") ?? string.Empty)
         {
@@ -165,11 +153,10 @@ public class Program
         {
             var exception = new ArgumentException("The PRIVATE_KEY environment variable is required");
             loggingService.LogException(exception);
-            throw exception;
+            return 1;
         }
 
         AccountManager.Instance.Signer = new LocalAccount(privateKey, 0);
-        ChannelManager.Instance.LoggingService = loggingService;
 
         // Setup WebSocket server
         var port = Environment.GetEnvironmentVariable("PORT") ?? "8000";
@@ -177,18 +164,52 @@ public class Program
         _Server.AddWebSocketService("/", () => new SignallingBehavior(loggingService));
         _Server.Start();
 
+        // Start processing input
         _ = Task.Run(() => ProcessInput(_ApplicationCTS.Token));
 
         // Set initial mode
         SetMode(stream ? Mode.Stream : Mode.Listen);
 
-        // Cancel Ctrl+C
+        // Handle process exit
+        AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
         Console.CancelKeyPress += (sender, e) =>
         {
             HandleCancelKeyPress(e);
         };
 
         return 0;
+    }
+
+    /// <summary>
+    /// Configure DI services
+    /// </summary>
+    private static void ConfigureServices()
+    {
+        var services = new ServiceCollection();
+
+        // Add logging
+        var insightsConnectionString = Environment.GetEnvironmentVariable("APPLICATION_INSIGHTS_CONNECTION_STRING");
+        if (!string.IsNullOrEmpty(insightsConnectionString))
+        {
+            services.AddSingleton<ILoggingService>(provider =>
+            {
+                var configuration = TelemetryConfiguration.CreateDefault();
+                configuration.ConnectionString = insightsConnectionString;
+
+                var telemetryClient = new TelemetryClient(configuration);
+                return new ApplicationInsightsLoggingService(telemetryClient);
+            });
+        }
+        else
+        {
+            services.AddSingleton<ILoggingService, AppLoggingService>();
+        }
+
+        // Add signalling
+        services.AddSingleton<ISignallingServiceFactory, WebSocketSharpSignallingServiceFactory>();
+
+        // Build service provider
+        _ServiceProvider = services.BuildServiceProvider();
     }
 
     /// <summary>
@@ -279,7 +300,7 @@ public class Program
             {
                 // Execute the command (outside the lock to avoid holding the lock for long periods)
                 var args = inputToProcess.Split(' ');
-                Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions, ExitOptions>(args)
+                Parser.Default.ParseArguments<VersionOptions, StatusOptions, StreamOptions, ListOptions, ConnectOptions, ExitOptions>(args)
                     .MapResult(
                         (VersionOptions opts) => new VersionCommand().Execute(),
                         (StatusOptions opts) => new StatusCommand().Execute(),
@@ -297,6 +318,27 @@ public class Program
                             { 
                                 command = new ListAccountsCommand(
                                     opts.Skip, opts.Take);
+                            }
+
+                            return command.Execute();
+                        },
+                        (ConnectOptions opts) =>
+                        {
+                            ICommand command;
+                            if (null != opts.Node)
+                            { 
+                                if (null == _ServiceProvider)
+                                {
+                                    return 1;
+                                }
+
+                                var signalFactory = _ServiceProvider.GetRequiredService<ISignallingServiceFactory>();
+                                command = new ConnectCommand(opts.Node, opts.Endpoint, signalFactory);
+                            }
+
+                            else
+                            {
+                                 throw new NotImplementedException();
                             }
 
                             return command.Execute();
