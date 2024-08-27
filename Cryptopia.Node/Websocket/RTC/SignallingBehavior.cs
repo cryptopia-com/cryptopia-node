@@ -159,8 +159,7 @@ namespace Cryptopia.Node.RPC
                         "Invalid node",
                         new Dictionary<string, string>
                         {
-                            { "node", message.Sender.Account },
-                            { "account", message.Sender.Account },
+                            { "node", message.Receiver.Signer },
                             { "signer", message.Sender.Signer }
                         });
                     return;
@@ -182,7 +181,7 @@ namespace Cryptopia.Node.RPC
                         "Invalid account",
                         new Dictionary<string, string>
                         {
-                            { "node", message.Receiver.Account },
+                            { "node", message.Receiver.Signer },
                             { "account", message.Sender.Account },
                             { "signer", message.Sender.Signer }
                         });
