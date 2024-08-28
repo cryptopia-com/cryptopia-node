@@ -1,5 +1,4 @@
 ﻿using Cryptopia.Node.RTC.Channels.Types;
-using Cryptopia.Node.RTC.Extensions;
 using Cryptopia.Node.RTC.Messages;
 using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
@@ -42,6 +41,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         {
             OriginSigner = originSigner;
             DestinationSigner = destinationSigner;
+            signallingService.OnReceiveMessage += SignallingService_OnReceiveMessage;
         }
 
         /// <summary>
@@ -100,7 +100,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <returns></returns>
         protected override void SendAnswer(SDPInfo answer)
         {
-            var enveloppe = new RTCMessageEnvelope()
+            SignallingService.Send(new RTCMessageEnvelope()
             {
                 Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),
                 MaxAge = 60, // 1 minute
@@ -121,16 +121,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     Answer = answer
                 },
                 Signature = ""
-            };
-
-            var channelData = GatherChannelData();
-            channelData.Add("SignallingService.IsOpen", SignallingService.IsOpen.ToString());
-            channelData.Add("SDPInfo.Type", answer.Type);
-            channelData.Add("SDPInfo.SDP", answer.SDP);
-            channelData.Add("RTCMessageEnvelope", enveloppe.Serialize());
-            LoggingService?.LogInfo("Sending SDP answer", channelData);
-
-            SignallingService.Send(enveloppe);
+            });
         }
 
         /// <summary>
@@ -172,7 +163,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <returns></returns>
         protected override void SendCandidate(IceCandidate candidate)
         {
-            var envelope = new RTCMessageEnvelope()
+            SignallingService.Send(new RTCMessageEnvelope()
             {
                 Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),
                 MaxAge = 60, // 1 minute
@@ -194,16 +185,18 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                 },
                 Signature = ""
-            };
+            });
+        }
 
-            var channelData = GatherChannelData();
-            channelData.Add("SignallingService.IsOpen", SignallingService.IsOpen.ToString());
-            channelData.Add("candidate.Candidate", candidate.Candidate);
-            channelData.Add("candidate.SdpMid", candidate.SdpMid);
-            channelData.Add("RTCMessageEnvelope", envelope.Serialize());
-            LoggingService?.LogInfo("Sending SDP candidate", channelData);
-
-            SignallingService.Send(envelope);
+        /// <summary>
+        /// Handles reception of an SDP answer
+        /// 
+        /// Processes the received SDP answer and updates the local peer connection
+        /// </summary>
+        /// <param name="answer">The SDP answer received</param>
+        protected override void OnReceiveAnswer(SDPInfo answer)
+        {
+            SetAnswer(answer);
         }
 
         /// <summary>
@@ -262,6 +255,65 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             var data = GatherChannelData();
             data.Add("latency", latency.ToString());
             LoggingService?.LogWarning("High latency detected", data);
+        }
+
+        /// <summary>
+        /// Called when a message is received from the signalling service
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void SignallingService_OnReceiveMessage(object? sender, RTCMessageEnvelope e)
+        {
+            if (IsDisposedOrDisposing(true))
+            {
+                return;
+            }
+
+            // Check max-age
+            if (((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds() > e.Timestamp + e.MaxAge)
+            {
+                LoggingService?.LogWarning(
+                    "Message expired", GatherChannelData());
+                return;
+            }
+
+            // Check sender
+            if (e.Sender.Signer != DestinationSigner.Address)
+            {
+                LoggingService?.LogWarning(
+                    $"Undexpeted sender account; expected `{DestinationSigner.Address}` but got '{e.Sender.Signer}'", 
+                    GatherChannelData());
+                return;
+            }
+
+            // Check receiver
+            if (e.Receiver.Signer != OriginSigner.Address)
+            {
+                LoggingService?.LogWarning(
+                    $"Undexpeted receiver device; expected `{OriginSigner.Address}` but got '{e.Receiver.Signer}'", 
+                    GatherChannelData());
+                return;
+            }
+
+            // Check signature
+
+
+
+            // Parse message
+            switch (e.Payload.Type)
+            {
+                case RTCMessageType.Answer:
+                    OnReceiveAnswer(((RTCAnswerMessage)e.Payload).Answer);
+                    break;
+
+                case RTCMessageType.Rejection:
+                    OnReceiveRejection();
+                    break;
+
+                case RTCMessageType.Candidate:
+                    OnReceiveCandidate(((RTCCandidateMessage)e.Payload).Canidate);
+                    break;
+            }
         }
     }
 }

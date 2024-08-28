@@ -175,6 +175,17 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         }
 
         /// <summary>
+        /// Handles reception of an SDP answer
+        /// 
+        /// Processes the received SDP answer and updates the local peer connection
+        /// </summary>
+        /// <param name="answer">The SDP answer received</param>
+        protected override void OnReceiveAnswer(SDPInfo answer)
+        {
+            SetAnswer(answer);
+        }
+
+        /// <summary>
         /// Handles reception of an SDP rejection
         /// 
         /// Processes the received SDP rejection and updates the channel state accordingly

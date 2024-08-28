@@ -1,5 +1,4 @@
-﻿using Cryptopia.Node.RTC.Channels;
-using Cryptopia.Node.RTC.Channels.Config.ICE;
+﻿using Cryptopia.Node.RTC.Channels.Config.ICE;
 using Cryptopia.Node.RTC.Channels.Types;
 using Cryptopia.Node.RTC.Extensions;
 using Cryptopia.Node.RTC.Messages;
@@ -7,7 +6,6 @@ using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
 using Cryptopia.Node.Services.Logging;
 using SIPSorcery.Net;
-using System.Threading;
 using System.Timers;
 
 namespace Cryptopia.Node.RTC.Channels.Concrete
@@ -1193,6 +1191,39 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         }
 
         /// <summary>
+        /// Sets the SDP answer
+        /// 
+        /// Processes the received SDP answer and updates the local peer connection
+        /// </summary>
+        /// <param name="answer">The SDP answer to set</param>
+        /// <returns></returns>
+        protected void SetAnswer(SDPInfo awnser)
+        {
+            if (State != ChannelState.Signalling)
+            {
+                LoggingService?.LogError(
+                    "Can only set answer in the signalling state", 
+                    GatherChannelData());
+                return;
+            }
+
+            if (null == _PeerConnection)
+            {
+                LoggingService?.LogError(
+                    "Peer connection not initizlized", GatherChannelData());
+                return;
+            }
+
+            var remoteSessionDescription = new RTCSessionDescriptionInit()
+            {
+                type = awnser.Type.ToEnum<RTCSdpType>(),
+                sdp = awnser.SDP
+            };
+
+            _PeerConnection.setRemoteDescription(remoteSessionDescription);
+        }
+
+        /// <summary>
         /// Adds an ICE candidate to the peer connection
         /// 
         /// Handles the reception and addition of ICE candidates necessary for establishing the WebRTC connection
@@ -1232,8 +1263,16 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// Returns whether the channel is disposed or disposing (not thread-safe)
         /// </summary>
         /// <returns></returns>
-        private bool IsDisposedOrDisposing()
+        public bool IsDisposedOrDisposing(bool aquireLock = false)
         {
+            if (aquireLock)
+            {
+                lock (_ChannelLock)
+                {
+                    return IsDisposedOrDisposing(false);
+                }
+            }
+
             return _State == ChannelState.Disposing || _State == ChannelState.Disposed;
         }
 
@@ -1757,6 +1796,14 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <param name="candidate">The ICE candidate to send</param>
         /// <returns></returns>
         protected abstract void SendCandidate(IceCandidate candidate);
+
+        /// <summary>
+        /// Handles reception of an SDP answer
+        /// 
+        /// Processes the received SDP answer and updates the local peer connection
+        /// </summary>
+        /// <param name="answer">The SDP answer received</param>
+        protected abstract void OnReceiveAnswer(SDPInfo answer);
 
         /// <summary>
         /// Handles reception of an SDP rejection

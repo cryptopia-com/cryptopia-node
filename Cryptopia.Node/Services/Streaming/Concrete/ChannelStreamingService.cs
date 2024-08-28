@@ -86,7 +86,7 @@ namespace Cryptopia.Node.Services.Streaming
                             var isStable = nodeChannel.IsStable ? "[green]Yes[/]" : "[red]No[/]";
                             var isPolite = nodeChannel.IsPolite ? "[green]Yes[/]" : "[red]No[/]";
                             var latencyColor = nodeChannel.Latency > nodeChannel.MaxLatency ? "red" : "green";
-                            nodeTable.AddRow(nodeChannel.DestinationSigner.Address, "Subnet", state, isStable, isPolite, $"[{latencyColor}]{nodeChannel.Latency} ms[/]");
+                            nodeTable.AddRow(nodeChannel.DestinationSigner.Address, "None", state, isStable, isPolite, $"[{latencyColor}]{nodeChannel.Latency} ms[/]");
                         }
 
                         // Fetch and display account channels

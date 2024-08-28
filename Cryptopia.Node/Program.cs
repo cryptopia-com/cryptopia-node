@@ -232,6 +232,7 @@ public class Program
             StopListening();
             StopStreaming();
             _StreamingService.Dispose();
+            _ServiceProvider?.Dispose();
         }
         catch (Exception ex)
         {
@@ -507,6 +508,7 @@ public class Program
             StopListening();
             StopStreaming();
             _StreamingService.Dispose();
+            _ServiceProvider?.Dispose();
         }
         catch (Exception ex)
         {
