@@ -172,7 +172,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <returns></returns>
         protected override void SendCandidate(IceCandidate candidate)
         {
-            SignallingService.Send(new RTCMessageEnvelope()
+            var envelope = new RTCMessageEnvelope()
             {
                 Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),
                 MaxAge = 60, // 1 minute
@@ -194,7 +194,16 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                 },
                 Signature = ""
-            });
+            };
+
+            var channelData = GatherChannelData();
+            channelData.Add("SignallingService.IsOpen", SignallingService.IsOpen.ToString());
+            channelData.Add("candidate.Candidate", candidate.Candidate);
+            channelData.Add("candidate.SdpMid", candidate.SdpMid);
+            channelData.Add("RTCMessageEnvelope", envelope.Serialize());
+            LoggingService?.LogInfo("Sending SDP candidate", channelData);
+
+            SignallingService.Send(envelope);
         }
 
         /// <summary>
