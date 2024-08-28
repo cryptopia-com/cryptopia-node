@@ -1,4 +1,5 @@
 ﻿using Cryptopia.Node.RTC.Channels.Types;
+using Cryptopia.Node.RTC.Extensions;
 using Cryptopia.Node.RTC.Messages;
 using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
@@ -99,7 +100,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <returns></returns>
         protected override void SendAnswer(SDPInfo answer)
         {
-            SignallingService.Send(new RTCMessageEnvelope()
+            var enveloppe = new RTCMessageEnvelope()
             {
                 Timestamp = ((DateTimeOffset)DateTime.UtcNow).ToUnixTimeSeconds(),
                 MaxAge = 60, // 1 minute
@@ -120,7 +121,16 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     Answer = answer
                 },
                 Signature = ""
-            });
+            };
+
+            var channelData = GatherChannelData();
+            channelData.Add("SignallingService.IsOpen", SignallingService.IsOpen.ToString());
+            channelData.Add("SDPInfo.Type", answer.Type);
+            channelData.Add("SDPInfo.SDP", answer.SDP);
+            channelData.Add("RTCMessageEnvelope", enveloppe.Serialize());
+            LoggingService?.LogInfo("Sending SDP answer", channelData);
+
+            SignallingService.Send(enveloppe);
         }
 
         /// <summary>
