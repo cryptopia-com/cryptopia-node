@@ -136,12 +136,25 @@ namespace Cryptopia.Node.RPC
             }
 
             // Check receiver (us)
+            if (null == AccountManager.Instance.Signer)
+            { 
+                LoggingService?.LogError(
+                    "Node signer not set",
+                    new Dictionary<string, string>
+                    {
+                        { "sender", message.Sender.ToString() },
+                        { "receiver", message.Receiver.ToString() }
+                    });
+                return;
+            }
+
             if (!AccountManager.Instance.IsSigner(message.Receiver.Signer))
             {
                 LoggingService?.LogError(
                     "Receiver account not registered as node signer",
                     new Dictionary<string, string>
                     {
+                        { "signer",AccountManager.Instance.Signer.ToString() },
                         { "sender", message.Sender.ToString() },
                         { "receiver", message.Receiver.ToString() }
                     });

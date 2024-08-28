@@ -27,7 +27,7 @@ namespace Cryptopia.Node.RTC.Messages
         /// <returns></returns>
         public override string ToString()
         {
-            return $"{Account} {Signer}";
+            return $"{Account} ({Signer})";
         }
     }
 }
