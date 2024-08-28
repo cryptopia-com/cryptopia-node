@@ -17,7 +17,7 @@ namespace Cryptopia.Node.RTC.Messages
         {
             get
             {
-                return Account == "node";
+                return Account.Equals("node", StringComparison.InvariantCultureIgnoreCase);
             }
         }
 
