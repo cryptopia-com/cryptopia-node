@@ -386,7 +386,7 @@ namespace Cryptopia.Node.RTC
 
                 if (disposing)
                 {
-                    // Dispose all channels
+                    // Dispose account channels
                     foreach (var accountChannels in _AccountChannels.Values)
                     {
                         foreach (var channel in accountChannels.Values)
@@ -398,11 +398,26 @@ namespace Cryptopia.Node.RTC
                             catch (Exception ex)
                             {
                                 // Log the exception
-                                Console.WriteLine($"Error disposing channel: {ex.Message}");
+                                Console.WriteLine($"Error disposing account channel: {ex.Message}");
                             }
                         }
                     }
                     _AccountChannels.Clear();
+
+                    // Dispose node channels
+                    foreach (var channel in _NodeChannels.Values)
+                    {
+                        try
+                        {
+                            channel.Dispose();
+                        }
+                        catch (Exception ex)
+                        {
+                            // Log the exception
+                            Console.WriteLine($"Error disposing node channel: {ex.Message}");
+                        }
+                    }
+                    _NodeChannels.Clear();
 
                     // Dispose the logging service
                     if (null != LoggingService)
