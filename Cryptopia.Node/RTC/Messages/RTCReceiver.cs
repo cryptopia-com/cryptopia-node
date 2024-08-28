@@ -20,5 +20,14 @@ namespace Cryptopia.Node.RTC.Messages
                 return Account == "node";
             }
         }
+
+        /// <summary>
+        /// Display the receiver as a string
+        /// </summary>
+        /// <returns></returns>
+        public override string ToString()
+        {
+            return $"{Account} ({Signer})";
+        }
     }
 }

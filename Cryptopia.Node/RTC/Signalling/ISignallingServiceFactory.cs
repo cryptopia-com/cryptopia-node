@@ -1,13 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace Cryptopia.Node.RTC.Signalling
+﻿namespace Cryptopia.Node.RTC.Signalling
 {
+    /// <summary>
+    /// Factory for creating signalling services
+    /// </summary>
     public interface ISignallingServiceFactory
     {
+        /// <summary>
+        /// Create a signalling service
+        /// </summary>
+        /// <param name="endpoint"></param>
+        /// <returns></returns>
         ISignallingService Create(string endpoint);
     }
 }

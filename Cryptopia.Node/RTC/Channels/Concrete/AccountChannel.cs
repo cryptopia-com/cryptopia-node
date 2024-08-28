@@ -60,9 +60,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             return new Dictionary<string, string>
             {
                 { "type", "Account Channel" },
-                { "Node", OriginSigner.Address },
-                { "Signer", DestinationSigner.Address },
-                { "Account", DestinationAccount.Address }
+                { "origin", OriginSigner.Address },
+                { "destination signer", DestinationSigner.Address },
+                { "destination account", DestinationAccount.Address }
             };
         }
 

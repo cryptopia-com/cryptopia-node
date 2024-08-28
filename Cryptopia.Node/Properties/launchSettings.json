@@ -5,7 +5,7 @@
       "commandLineArgs": "--stream",
       "environmentVariables": {
         "APPLICATION_INSIGHTS_CONNECTION_STRING": "InstrumentationKey=6c7e9c65-62aa-45b7-9987-4cdc7e776ce2;IngestionEndpoint=https://southeastasia-1.in.applicationinsights.azure.com/;LiveEndpoint=https://southeastasia.livediagnostics.monitor.azure.com/;ApplicationId=9e3c6848-b2ac-4ae0-88ac-9a5a541efc9a",
-        "PRIVATE_KEY": "1834bdaab8764d88846c6defa47c1770393a96a2fbb1208c245efdfbe8b39198"
+        "PRIVATE_KEY": "67d43bec1efa213ae1d6973a8e3c82f610d17f4b575206d96a405dcf62f1946f"
       }
     }
   }

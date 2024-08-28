@@ -117,9 +117,8 @@ namespace Cryptopia.Node.RPC
                     "Offer cannot be empty", 
                     new Dictionary<string, string>
                     {
-                        { "node", message.Receiver.Account },
-                        { "account", message.Sender.Account },
-                        { "signer", message.Sender.Signer }
+                       { "sender", message.Sender.ToString() },
+                       { "receiver", message.Receiver.ToString() }
                     });
                 return;
             }
@@ -130,7 +129,8 @@ namespace Cryptopia.Node.RPC
                     "Sender account or signer cannot be empty", 
                     new Dictionary<string, string>
                     {
-                        { "node", message.Receiver.Account }
+                       { "sender", message.Sender.ToString() },
+                       { "receiver", message.Receiver.ToString() }
                     });
                 return;
             }
@@ -142,9 +142,8 @@ namespace Cryptopia.Node.RPC
                     "Receiver account not registered as node signer",
                     new Dictionary<string, string>
                     {
-                        { "receiver", message.Receiver.Account },
-                        { "account", message.Sender.Account },
-                        { "signer", message.Sender.Signer }
+                        { "sender", message.Sender.ToString() },
+                        { "receiver", message.Receiver.ToString() }
                     });
                 return;
             }
@@ -159,8 +158,8 @@ namespace Cryptopia.Node.RPC
                         "Invalid node",
                         new Dictionary<string, string>
                         {
-                            { "node", message.Receiver.Signer },
-                            { "signer", message.Sender.Signer }
+                            { "sender", message.Sender.ToString() },
+                            { "receiver", message.Receiver.ToString() }
                         });
                     return;
                 }
@@ -181,9 +180,8 @@ namespace Cryptopia.Node.RPC
                         "Invalid account",
                         new Dictionary<string, string>
                         {
-                            { "node", message.Receiver.Signer },
-                            { "account", message.Sender.Account },
-                            { "signer", message.Sender.Signer }
+                            { "sender", message.Sender.ToString() },
+                            { "receiver", message.Receiver.ToString() }
                         });
                     return;
                 }
