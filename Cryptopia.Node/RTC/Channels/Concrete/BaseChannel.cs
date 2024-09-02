@@ -6,6 +6,7 @@ using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
 using Cryptopia.Node.Services.Logging;
 using SIPSorcery.Net;
+using System.Threading;
 using System.Timers;
 
 namespace Cryptopia.Node.RTC.Channels.Concrete
@@ -117,6 +118,13 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         public double HeartbeatTimeout { get; private set; } = 1000;
 
         /// <summary>
+        /// Audit interval in milliseconds
+        /// 
+        /// The interval at which the channel will perform audits to ensure the connection is stable
+        /// </summary>
+        public double AuditInterval { get; private set; } = 200;
+
+        /// <summary>
         /// Signalling timeout in milliseconds 
         /// 
         /// After this duration, the channel will consider the connection as timed out
@@ -209,6 +217,10 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         private DateTime _LastHeartbeatTime;
         private bool _IsHeartbeatPending;
         private bool _IsHeartbeatTimeout;
+
+        // Auditor
+        private readonly object _AuditLock = new object();
+        private System.Timers.Timer? _AuditTimer;
 
         // Constants
         private const string DATA_CHANNEL_LABEL = "data";
@@ -321,6 +333,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// Starts the heartbeat
         /// </summary>
         /// <param name="interval"></param>
+        /// <param name="timeout"></param>
         /// <exception cref="InvalidOperationException"></exception>
         public T StartHeartbeat(double? interval = null, double? timeout = null)
         {
@@ -376,7 +389,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     _HeartbeatTimer = null;
                 }
 
-                HeartbeatInterval = 0; // Stopped  
+                // Stopped
                 _IsHeartbeatPending = false;
 
                 SetLatency(
@@ -395,6 +408,51 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             if (shouldNotifyHighLatency)
             {
                 OnHighLatencyDetected(_Latency);
+            }
+        }
+
+        /// <summary>
+        /// Starts the auditor process
+        /// </summary>
+        private void StartAuditor()
+        {
+            if (null == _PeerConnection)
+            {
+                var exception = new InvalidOperationException("Peer connection not initialized");
+                LoggingService?.LogException(exception, GatherChannelData());
+                throw exception;
+            }
+
+            lock (_AuditLock)
+            {
+                if (null != _AuditTimer)
+                {
+                    var exception = new InvalidOperationException("Auditor already started");
+                    LoggingService?.LogException(exception, GatherChannelData());
+                    throw exception;
+                }
+
+                // Start auditor 
+                _AuditTimer = new System.Timers.Timer(AuditInterval);
+                _AuditTimer.Elapsed += OnAuditTimerElapsed;
+                _AuditTimer.Start();
+            }
+        }
+
+        /// <summary>
+        /// Stops the auditor process
+        /// </summary>
+        private void StopAuditor()
+        {
+            lock (_AuditLock)
+            {
+                if (null != _AuditTimer)
+                {
+                    _AuditTimer.Stop();
+                    _AuditTimer.Elapsed -= OnAuditTimerElapsed;
+                    _AuditTimer.Dispose();
+                    _AuditTimer = null;
+                }
             }
         }
 
@@ -1283,7 +1341,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         public void Dispose()
         {
-            Dispose(true).GetAwaiter().GetResult();
+            DisposeAsync(true).GetAwaiter().GetResult();
             GC.SuppressFinalize(this);
         }
 
@@ -1294,7 +1352,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         /// <param name="shouldDispose">Indicates whether managed resources should be disposed</param>
         /// <returns></returns>
-        protected virtual async Task Dispose(bool shouldDispose)
+        protected virtual async Task DisposeAsync(bool shouldDispose)
         {
             bool shouldNotifyChange;
             lock (_ChannelLock)
@@ -1332,7 +1390,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         peerConnection = _PeerConnection;
                     }
 
-                    // Stop heartbeat
+                    // Stop monitoring
+                    StopAuditor();
                     StopHeartbeat();
 
                     // Dispose managed resources
@@ -1395,7 +1454,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         ~BaseChannel()
         {
-            Dispose(false).GetAwaiter().GetResult();
+            DisposeAsync(false).GetAwaiter().GetResult();
         }
 
         #endregion
@@ -1506,6 +1565,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         protected virtual void OnCommandChannelOpen()
         {
+            StartAuditor();
             CheckStable();
         }
 
@@ -1750,6 +1810,98 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         protected virtual void OnHighLatencyDetected(double latency)
         {
             OnHighLatency?.Invoke(this, latency);
+        }
+
+        /// <summary>
+        /// Called when the audit timer elapses
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void OnAuditTimerElapsed(object? sender, ElapsedEventArgs e)
+        {
+            _ = Task.Run(() => HandleAuditTimerElapsedAsync());
+        }
+
+        /// <summary>
+        /// Handles the audit timer elapsed event asynchronously
+        /// </summary>
+        /// <returns></returns>
+        private async Task HandleAuditTimerElapsedAsync()
+        {
+            bool shouldDispose = false;
+            bool shouldClose = false;
+
+            lock (_ChannelLock)
+            {
+
+                // TODO
+                // 1. channel state incorrect after closure by other party, indicates open but isn't open. Perform try catch test instead.
+                // 2. Implement PerformAudit() function and call from audit timer elapse as well as before Send(..) is called
+
+                if (_State != ChannelState.Disposing && _State != ChannelState.Disposed &&
+                    (null == _CommandChannel || _CommandChannel.readyState != RTCDataChannelState.open))
+                {
+                    shouldDispose = true;
+                }
+
+                else if (_State == ChannelState.Open &&
+                    (null == _DataChannel || _DataChannel.readyState != RTCDataChannelState.open))
+                {
+                    shouldClose = true;
+                }
+
+                else
+                {
+                    bool isReallyOpen = true;
+                    try
+                    {
+                        _CommandChannel?.send("audit");
+                    }
+                    catch (Exception)
+                    {
+                        isReallyOpen = false;
+                    }
+
+                    if (!isReallyOpen)
+                    {
+                        Console.WriteLine("Found inconsistency");
+                    }
+                }
+            }
+
+            // Should have been disposed
+            if (shouldDispose)
+            {
+                Dispose();
+            }
+
+            // Should have been closed
+            else if (shouldClose)
+            {
+                lock (_AuditLock)
+                {
+                    // Stop the timer to prevent re-entry
+                    _AuditTimer?.Stop();
+                }
+
+                try
+                {
+                    await CloseAsync(false);
+                }
+                catch (Exception ex)
+                {
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+                finally
+                {
+                    // Restart the timer
+                    lock (_AuditLock)
+                    {
+                        _AuditTimer?.Start();
+                    }
+                }
+            }
         }
 
         #endregion
