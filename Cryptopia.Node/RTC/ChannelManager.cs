@@ -264,7 +264,7 @@ namespace Cryptopia.Node.RTC
 
             // Subscribe  to events
             channel.OnMessage += OnAccountChannelMessage;
-            channel.OnStable += (sender, args) => channel.StartHeartbeat();
+            channel.OnStable += (sender, args) => channel.StartHeartbeat().StartAuditor();
             channel.OnTimeout += (sender, args) => RemoveAccountChannel(account, signer, true);
             channel.OnDispose += (sender, args) => RemoveAccountChannel(account, signer, false);
 

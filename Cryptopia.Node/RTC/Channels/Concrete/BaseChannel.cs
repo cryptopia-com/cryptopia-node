@@ -6,8 +6,164 @@ using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
 using Cryptopia.Node.Services.Logging;
 using SIPSorcery.Net;
-using System.Threading;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Timers;
+
+/// <summary>
+/// Audits sent and buffered data to ensure the connection is still alive
+/// </summary>
+public class ChannelBufferAuditor
+{
+    /// <summary>
+    /// Entity for tracking sent and buffered data
+    /// </summary>
+    public struct BufferedData
+    {
+        /// <summary>
+        /// Data size that was buffered
+        /// </summary>
+        public ulong BufferSize { get; private set; }
+
+        /// <summary>
+        /// Expect the data to be out of the buffer by this time
+        /// </summary>
+        public DateTime ExpirationTimestamp { get; private set; } 
+        
+        /// <summary>
+        /// Constructor
+        /// </summary>
+        /// <param name="bufferSize"></param>
+        /// <param name="expirationTimestamp"></param>
+        public BufferedData(ulong bufferSize, DateTime expirationTimestamp)
+        {
+            BufferSize = bufferSize;
+            ExpirationTimestamp = expirationTimestamp;
+        }
+    }
+
+    /// <summary>
+    /// Cleaning interval in milliseconds
+    /// 
+    /// The interval at which the auditor will clean the sent and buffered data
+    /// </summary>
+    public double CleaningInterval { get; private set; } = 50;
+
+    /// <summary>
+    /// The max time that data can be buffered for
+    /// </summary>
+    public double MaxBufferTime { get; private set; } = 500;
+
+    /// <summary>
+    /// Collection of sent and buffered data
+    /// </summary>
+    private ConcurrentQueue<BufferedData> _SentDataQueue = new ConcurrentQueue<BufferedData>();
+
+    /// <summary>
+    /// Used to cancel the cleaning process
+    /// </summary>
+    private CancellationTokenSource _CancellationSource = new CancellationTokenSource();
+
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    public ChannelBufferAuditor()
+    { 
+        _ = Task.Run(() => CleanAsync(
+            _CancellationSource.Token));
+    }
+
+    /// <summary>
+    /// Records the sent data
+    /// </summary>
+    /// <param name="bufferSize"></param>
+    public void Record(ulong bufferSize)
+    {
+        _SentDataQueue.Enqueue(new BufferedData(
+            bufferSize,
+            DateTime.UtcNow + TimeSpan.FromMilliseconds(MaxBufferTime)));
+    }
+
+    /// <summary>
+    /// Performs an audit on the sent and buffered data
+    /// 
+    /// It checks if the actual buffer size is within the limit of the maximum buffer size that 
+    /// is allowed to be in the buffer currently
+    /// </summary>
+    /// <param name="currentBufferSize"></param>
+    /// <returns></returns>
+    public bool Audit(ulong currentBufferSize)
+    {
+        // Copy for audit
+        var sentDataQueue = new Queue<BufferedData>(_SentDataQueue);
+
+        // Check if the queue is empty
+        if (0 == sentDataQueue.Count)
+        {
+            return true;
+        }
+
+        // Check if the oldest data has expired
+        ulong maxBufferSize = 0;
+        while (sentDataQueue.Count > 0)
+        {
+            if (_SentDataQueue.TryPeek(out var oldestData))
+            {
+                if (DateTime.UtcNow > oldestData.ExpirationTimestamp)
+                {
+                    // Expired - Not allowed in buffer
+                    _SentDataQueue.TryDequeue(out _);
+                }
+
+                else
+                { 
+                    // Allowed in buffer
+                    maxBufferSize += oldestData.BufferSize;
+                }
+            }
+        }
+
+        Debug.WriteLine($"currentBufferSize: {currentBufferSize}, maxBufferSize: {maxBufferSize}");
+        Console.WriteLine($"currentBufferSize: {currentBufferSize}, maxBufferSize: {maxBufferSize}");
+
+        // Check if the current buffer size is within the limit
+        return currentBufferSize <= maxBufferSize;
+    }
+
+    /// <summary>
+    /// Performs cleanup of the sent and buffered data
+    /// </summary>
+    /// <param name="token"></param>
+    /// <returns></returns>
+    private async Task CleanAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            while (_SentDataQueue.Count > 0)
+            {
+                if (_SentDataQueue.TryPeek(out var oldestData))
+                {
+                    if (DateTime.UtcNow > oldestData.ExpirationTimestamp)
+                    {
+                        // Expired - Not allowed in buffer
+                        _SentDataQueue.TryDequeue(out _);
+                    }
+                }
+            }
+
+            await Task.Delay((int)CleaningInterval);
+        }
+    }
+
+    /// <summary>
+    /// Destructor
+    /// </summary>
+    ~ChannelBufferAuditor()
+    {
+        _CancellationSource.Cancel();
+    }
+}
+
 
 namespace Cryptopia.Node.RTC.Channels.Concrete
 {
@@ -108,7 +264,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// The interval at which the channel will send ping messages to the 
         /// remote peer in order to ensure the connection is still alive
         /// </summary>
-        public double HeartbeatInterval { get; private set; } = 5000;
+        public double HeartbeatInterval { get; private set; } = 1000;
 
         /// <summary>
         /// Heartbeat timeout in milliseconds
@@ -221,6 +377,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         // Auditor
         private readonly object _AuditLock = new object();
         private System.Timers.Timer? _AuditTimer;
+        private ChannelBufferAuditor? _CommandChannelAuditor;
 
         // Constants
         private const string DATA_CHANNEL_LABEL = "data";
@@ -414,7 +571,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <summary>
         /// Starts the auditor process
         /// </summary>
-        private void StartAuditor()
+        public T StartAuditor()
         {
             if (null == _PeerConnection)
             {
@@ -433,16 +590,29 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 }
 
                 // Start auditor 
-                _AuditTimer = new System.Timers.Timer(AuditInterval);
-                _AuditTimer.Elapsed += OnAuditTimerElapsed;
-                _AuditTimer.Start();
+                _CommandChannelAuditor = new ChannelBufferAuditor();
+                //_AuditTimer = new System.Timers.Timer(AuditInterval);
+                //_AuditTimer.Elapsed += OnAuditTimerElapsed;
+                //_AuditTimer.Start();
+            }
+
+            return (T)this;
+        }
+
+        private CancellationTokenSource _AuditorCancellationTokenSource = new CancellationTokenSource();
+
+        private async Task RunAuditor()
+        {
+            while (!_AuditorCancellationTokenSource.IsCancellationRequested)
+            { 
+                // ToDo: Try in loop with delay
             }
         }
 
         /// <summary>
         /// Stops the auditor process
         /// </summary>
-        private void StopAuditor()
+        public void StopAuditor()
         {
             lock (_AuditLock)
             {
@@ -453,6 +623,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     _AuditTimer.Dispose();
                     _AuditTimer = null;
                 }
+
+                _CommandChannelAuditor = null;
             }
         }
 
@@ -910,7 +1082,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 // Send close command 
                 if (notify && commandChannel != null && commandChannel.readyState == RTCDataChannelState.open)
                 {
-                    commandChannel.send(ChannelCommand.Close.ToString());
+                    SendCommand(ChannelCommand.Close);
 
                     // Wait for the buffered amount to be zero or a short timeout
                     const int maxWaitTime = 500; // Maximum wait time in milliseconds
@@ -961,12 +1133,11 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         }
 
         /// <summary>
-        /// Sends a heartbeat message to the remote peer
-        /// 
-        /// Sends a ping message to the remote peer over the command channel in ordert to calculate the 
-        /// round-trip latency (RTT) and detect whether the connection is still alive or not
+        /// Send a command over the command channel
         /// </summary>
-        private void SendHeartbeat()
+        /// <param name="command"></param>
+        /// <param name="audit"></param>
+        private void SendCommand(ChannelCommand command, bool audit = true)
         {
             if (null == _CommandChannel)
             {
@@ -975,6 +1146,24 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 throw exception;
             }
 
+            _CommandChannel.send(command.ToString());
+
+            // Record bufferred data
+            if (audit)
+            {
+                _CommandChannelAuditor?.Record(
+                    (uint)command.ToString().Length);
+            }
+        }
+
+        /// <summary>
+        /// Sends a heartbeat message to the remote peer
+        /// 
+        /// Sends a ping message to the remote peer over the command channel in ordert to calculate the 
+        /// round-trip latency (RTT) and detect whether the connection is still alive or not
+        /// </summary>
+        private void SendHeartbeat()
+        {
             // Reset 
             lock (_HeartbeatLock)
             {
@@ -990,7 +1179,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             }
 
             // Ping
-            _CommandChannel?.send(ChannelCommand.Ping.ToString());
+            SendCommand(ChannelCommand.Ping);
         }
 
         /// <summary>
@@ -999,15 +1188,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         private void SendHeartbeatResponse()
         {
-            if (null == _CommandChannel)
-            {
-                var exception = new InvalidOperationException("Channel not open");
-                LoggingService?.LogException(exception, GatherChannelData());
-                throw exception;
-            }
-
             // Pong
-            _CommandChannel?.send(ChannelCommand.Pong.ToString());
+            SendCommand(ChannelCommand.Pong);
         }
 
         /// <summary>
@@ -1400,7 +1582,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         if (commandChannel.readyState == RTCDataChannelState.open)
                         {
                             // Send dispose command
-                            commandChannel.send(ChannelCommand.Dispose.ToString());
+                            SendCommand(ChannelCommand.Dispose, false);
 
                             // Wait for the buffered amount to be zero or a short timeout
                             const int maxWaitTime = 500; // Maximum wait time in milliseconds
@@ -1565,7 +1747,6 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         protected virtual void OnCommandChannelOpen()
         {
-            StartAuditor();
             CheckStable();
         }
 
@@ -1819,15 +2000,6 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// <param name="e"></param>
         private void OnAuditTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            _ = Task.Run(() => HandleAuditTimerElapsedAsync());
-        }
-
-        /// <summary>
-        /// Handles the audit timer elapsed event asynchronously
-        /// </summary>
-        /// <returns></returns>
-        private async Task HandleAuditTimerElapsedAsync()
-        {
             bool shouldDispose = false;
             bool shouldClose = false;
 
@@ -1850,21 +2022,16 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     shouldClose = true;
                 }
 
-                else
+                else if (null != _CommandChannel && null != _CommandChannelAuditor)
                 {
-                    bool isReallyOpen = true;
                     try
                     {
-                        _CommandChannel?.send("audit");
+                        shouldDispose = !_CommandChannelAuditor.Audit(
+                            _CommandChannel.bufferedAmount);
                     }
                     catch (Exception)
                     {
-                        isReallyOpen = false;
-                    }
-
-                    if (!isReallyOpen)
-                    {
-                        Console.WriteLine("Found inconsistency");
+                        shouldDispose = true;
                     }
                 }
             }
@@ -1886,7 +2053,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                 try
                 {
-                    await CloseAsync(false);
+                    _ = Task.Run(() => CloseAsync(false));
                 }
                 catch (Exception ex)
                 {
