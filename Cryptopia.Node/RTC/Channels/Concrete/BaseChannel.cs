@@ -1,4 +1,5 @@
-﻿using Cryptopia.Node.RTC.Channels.Config.ICE;
+﻿using Cryptopia.Node.RTC.Channels.Concrete.Audit;
+using Cryptopia.Node.RTC.Channels.Config.ICE;
 using Cryptopia.Node.RTC.Channels.Types;
 using Cryptopia.Node.RTC.Extensions;
 using Cryptopia.Node.RTC.Messages;
@@ -107,7 +108,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// The interval at which the channel will send ping messages to the 
         /// remote peer in order to ensure the connection is still alive
         /// </summary>
-        public double HeartbeatInterval { get; private set; } = 5000;
+        public double HeartbeatInterval { get; private set; } = 1000;
 
         /// <summary>
         /// Heartbeat timeout in milliseconds
@@ -115,6 +116,13 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// The maximum timeout that the channel will tolerate before self-terminating
         /// </summary>
         public double HeartbeatTimeout { get; private set; } = 1000;
+
+        /// <summary>
+        /// Audit interval in milliseconds
+        /// 
+        /// The interval at which the channel will perform audits to ensure the connection is stable
+        /// </summary>
+        public double AuditInterval { get; private set; } = 200;
 
         /// <summary>
         /// Signalling timeout in milliseconds 
@@ -209,6 +217,13 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         private DateTime _LastHeartbeatTime;
         private bool _IsHeartbeatPending;
         private bool _IsHeartbeatTimeout;
+
+        // Auditor
+        private readonly object _AuditLock = new object();
+        private Task<bool>? _AuditTask;
+        private CancellationTokenSource? _AuditTokenSource;
+        private ChannelBufferAuditor? _CommandChannelAuditor;
+        private ChannelBufferAuditor? _DataChannelAuditor;
 
         // Constants
         private const string DATA_CHANNEL_LABEL = "data";
@@ -321,6 +336,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// Starts the heartbeat
         /// </summary>
         /// <param name="interval"></param>
+        /// <param name="timeout"></param>
         /// <exception cref="InvalidOperationException"></exception>
         public T StartHeartbeat(double? interval = null, double? timeout = null)
         {
@@ -376,7 +392,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     _HeartbeatTimer = null;
                 }
 
-                HeartbeatInterval = 0; // Stopped  
+                // Stopped
                 _IsHeartbeatPending = false;
 
                 SetLatency(
@@ -396,6 +412,239 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             {
                 OnHighLatencyDetected(_Latency);
             }
+        }
+
+        /// <summary>
+        /// Starts the auditor process
+        /// </summary>
+        public T StartAuditor()
+        {
+            if (null == _PeerConnection)
+            {
+                var exception = new InvalidOperationException("Peer connection not initialized");
+                LoggingService?.LogException(exception, GatherChannelData());
+                throw exception;
+            }
+
+            lock (_AuditLock)
+            {
+                if (null != _AuditTokenSource)
+                {
+                    var exception = new InvalidOperationException("Auditor already started");
+                    LoggingService?.LogException(exception, GatherChannelData());
+                    throw exception;
+                }
+
+                // Start auditor 
+                _AuditTokenSource = new CancellationTokenSource();
+                _CommandChannelAuditor = new ChannelBufferAuditor();
+                _DataChannelAuditor = new ChannelBufferAuditor();
+            }
+
+            _ = Task.Run(() => RunAuditorAsync(
+                _AuditTokenSource.Token));
+
+            return (T)this;
+        }
+
+        /// <summary>
+        /// Stops the auditor process
+        /// </summary>
+        public void StopAuditor()
+        {
+            lock (_AuditLock)
+            {
+                _AuditTokenSource?.Cancel();
+                _AuditTokenSource = null;
+                _CommandChannelAuditor = null;
+                _DataChannelAuditor = null;
+            }
+        }
+
+        /// <summary>
+        /// Runs the auditor loop
+        /// </summary>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        private async Task RunAuditorAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var auditResult = await 
+                     PerformAuditAsync()
+                    .ConfigureAwait(false);
+
+                if (!auditResult)
+                {
+                    StopAuditor(); 
+                }
+
+                await Task
+                    .Delay((int)AuditInterval)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Performs an audit on the channel
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private Task<bool> PerformAuditAsync()
+        {
+            Task<bool> task = null;
+            lock (_AuditLock)
+            {
+                if (null != _AuditTask && !_AuditTask.IsCompleted)
+                {
+                    task = _AuditTask;
+                }
+            }
+
+            if (null == task)
+            {
+                task = DoPerformAuditAsync();
+                lock (_AuditLock)
+                {
+                    _AuditTask = task;
+                }
+            }
+
+            return task;
+        }
+
+        /// <summary>
+        /// Performs an audit on the channel
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private async Task<bool> DoPerformAuditAsync()
+        {
+            bool shouldClose = false;
+            bool shouldDispose = false;
+
+            RTCDataChannel? commandChannel = null;
+            RTCDataChannel? dataChannel = null;
+            ChannelBufferAuditor? commandChannelAuditor = null;
+            ChannelBufferAuditor? dataChannelAuditor = null;
+            ChannelState state;
+
+            lock (_ChannelLock) 
+            {
+                if (IsDisposedOrDisposing())
+                {
+                    return false;
+                }
+
+                // Capture state
+                commandChannel = _CommandChannel;
+                commandChannelAuditor = _CommandChannelAuditor;
+                dataChannel = _DataChannel;
+                dataChannelAuditor = _DataChannelAuditor;
+                state = _State;
+            }
+
+            // Audit command channel state
+            if (state != ChannelState.Disposing && state != ChannelState.Disposed &&
+               (null == commandChannel || commandChannel.readyState != RTCDataChannelState.open))
+            {
+                shouldDispose = true;
+
+                // Log failed audit
+                var data = GatherChannelData();
+                data.Add("readyState", null == commandChannel 
+                    ? "null" : commandChannel.readyState.ToString());
+                LoggingService?.LogWarning("State Audit Failed: Command channel", data);
+            }
+
+            // Audit data channel state
+            else if (state == ChannelState.Open &&
+                (null == dataChannel || dataChannel.readyState != RTCDataChannelState.open))
+            {
+                shouldClose = true;
+
+                // Log failed audit
+                var data = GatherChannelData();
+                data.Add("readyState", null == dataChannel
+                    ? "null" : dataChannel.readyState.ToString());
+                LoggingService?.LogWarning("State Audit Failed: Data channel", data);
+            }
+
+            // Audit command channel buffer
+            else if (null != commandChannel && null != commandChannelAuditor)
+            {
+                try
+                {
+                    // Audit buffered data
+                    var bufferedAmount = commandChannel.bufferedAmount;
+                    shouldDispose = !commandChannelAuditor.Audit(bufferedAmount);
+
+                    // Log failed audit
+                    if (shouldDispose)
+                    {
+                        var data = GatherChannelData();
+                        data.Add("", commandChannelAuditor.MaxBufferTime.ToString());
+                        data.Add("bufferedAmount", bufferedAmount.ToString());
+                        LoggingService?.LogWarning("Buffer Audit Failed: Command channel", data);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    shouldDispose = true;
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+            }
+
+            // Audit data channel buffer
+            else if (null != dataChannel && null != dataChannelAuditor)
+            {
+                try
+                {
+                    // Audit buffered data
+                    var bufferedAmount = dataChannel.bufferedAmount;
+                    shouldClose = !dataChannelAuditor.Audit(bufferedAmount);
+
+                    // Log failed audit
+                    if (shouldClose)
+                    {
+                        var data = GatherChannelData();
+                        data.Add("", dataChannelAuditor.MaxBufferTime.ToString());
+                        data.Add("bufferedAmount", bufferedAmount.ToString());
+                        LoggingService?.LogWarning("Buffer Audit Failed: Data channel", data);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    shouldClose = true;
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+            }
+
+            // Should have been disposed so dispose
+            if (shouldDispose)
+            {
+                await DisposeAsync(true)
+                     .ConfigureAwait(false);
+            }
+
+            // Should have been closed so close
+            else if (shouldClose)
+            {
+                try
+                {
+                    await CloseAsync(false)
+                         .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+            }
+
+            return !shouldDispose && !shouldClose;
         }
 
         /// <summary>
@@ -442,7 +691,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 var timeout = DateTime.Now + TimeSpan.FromMilliseconds(SignallingTimeout * 0.5f);
                 while (!SignallingService.IsOpen && DateTime.Now < timeout)
                 {
-                    await Task.Delay(100);
+                    await Task
+                        .Delay(100)
+                        .ConfigureAwait(false);
                 }
 
                 if (!SignallingService.IsOpen)
@@ -458,7 +709,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                         if (_State != ChannelState.Connecting)
                         {
-                            var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                            var exception = new InvalidOperationException(
+                                $"Expected {ChannelState.Connecting} state instead of {_State} state");
                             LoggingService?.LogException(exception, GatherChannelData());
                             throw exception;
                         }
@@ -543,7 +795,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         // Wait 
                         while (State != ChannelState.Connecting && State != ChannelState.Signalling)
                         {
-                            await Task.Delay(100);
+                            await Task
+                                .Delay(100)
+                                .ConfigureAwait(false);
                         }
 
                         return;
@@ -574,7 +828,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     // Wait 
                     while (State == ChannelState.Connecting || State == ChannelState.Signalling)
                     {
-                        await Task.Delay(100);
+                        await Task
+                            .Delay(100)
+                            .ConfigureAwait(false);
                     }
 
                     return;
@@ -616,7 +872,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             }
 
             // Create and send offer
-            await OfferAsync();
+            await OfferAsync()
+                 .ConfigureAwait(false);
         }
 
         /// <summary>
@@ -709,7 +966,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             StartSignallingTimer();
 
             // Connect to signalling server
-            await ConnectAsync();
+            await ConnectAsync()
+                 .ConfigureAwait(false);
 
             // Indicate signalling started
             bool shouldNotifyChange;
@@ -852,7 +1110,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 // Send close command 
                 if (notify && commandChannel != null && commandChannel.readyState == RTCDataChannelState.open)
                 {
-                    commandChannel.send(ChannelCommand.Close.ToString());
+                    SendCommand(ChannelCommand.Close);
 
                     // Wait for the buffered amount to be zero or a short timeout
                     const int maxWaitTime = 500; // Maximum wait time in milliseconds
@@ -861,7 +1119,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                     while (commandChannel.bufferedAmount > 0 && elapsedTime < maxWaitTime)
                     {
-                        await Task.Delay(checkInterval); // TODO: From settings
+                        await Task.Delay(checkInterval).ConfigureAwait(false); // TODO: From settings
                         elapsedTime += checkInterval;
                     }
                 }
@@ -903,12 +1161,11 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         }
 
         /// <summary>
-        /// Sends a heartbeat message to the remote peer
-        /// 
-        /// Sends a ping message to the remote peer over the command channel in ordert to calculate the 
-        /// round-trip latency (RTT) and detect whether the connection is still alive or not
+        /// Send a command over the command channel
         /// </summary>
-        private void SendHeartbeat()
+        /// <param name="command"></param>
+        /// <param name="audit"></param>
+        private void SendCommand(ChannelCommand command, bool audit = true)
         {
             if (null == _CommandChannel)
             {
@@ -917,6 +1174,24 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 throw exception;
             }
 
+            _CommandChannel.send(command.ToString());
+
+            // Record bufferred data
+            if (audit)
+            {
+                _CommandChannelAuditor?.Record(
+                    (uint)command.ToString().Length);
+            }
+        }
+
+        /// <summary>
+        /// Sends a heartbeat message to the remote peer
+        /// 
+        /// Sends a ping message to the remote peer over the command channel in ordert to calculate the 
+        /// round-trip latency (RTT) and detect whether the connection is still alive or not
+        /// </summary>
+        private void SendHeartbeat()
+        {
             // Reset 
             lock (_HeartbeatLock)
             {
@@ -932,7 +1207,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             }
 
             // Ping
-            _CommandChannel?.send(ChannelCommand.Ping.ToString());
+            SendCommand(ChannelCommand.Ping);
         }
 
         /// <summary>
@@ -941,15 +1216,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         private void SendHeartbeatResponse()
         {
-            if (null == _CommandChannel)
-            {
-                var exception = new InvalidOperationException("Channel not open");
-                LoggingService?.LogException(exception, GatherChannelData());
-                throw exception;
-            }
-
             // Pong
-            _CommandChannel?.send(ChannelCommand.Pong.ToString());
+            SendCommand(ChannelCommand.Pong);
         }
 
         /// <summary>
@@ -1283,7 +1551,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         public void Dispose()
         {
-            Dispose(true).GetAwaiter().GetResult();
+            DisposeAsync(true).GetAwaiter().GetResult();
             GC.SuppressFinalize(this);
         }
 
@@ -1294,7 +1562,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         /// <param name="shouldDispose">Indicates whether managed resources should be disposed</param>
         /// <returns></returns>
-        protected virtual async Task Dispose(bool shouldDispose)
+        protected virtual async Task DisposeAsync(bool shouldDispose)
         {
             bool shouldNotifyChange;
             lock (_ChannelLock)
@@ -1332,7 +1600,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         peerConnection = _PeerConnection;
                     }
 
-                    // Stop heartbeat
+                    // Stop monitoring
+                    StopAuditor();
                     StopHeartbeat();
 
                     // Dispose managed resources
@@ -1341,7 +1610,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         if (commandChannel.readyState == RTCDataChannelState.open)
                         {
                             // Send dispose command
-                            commandChannel.send(ChannelCommand.Dispose.ToString());
+                            SendCommand(ChannelCommand.Dispose, false);
 
                             // Wait for the buffered amount to be zero or a short timeout
                             const int maxWaitTime = 500; // Maximum wait time in milliseconds
@@ -1350,7 +1619,10 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                             while (commandChannel.bufferedAmount > 0 && elapsedTime < maxWaitTime)
                             {
-                                await Task.Delay(checkInterval);
+                                await Task
+                                    .Delay(checkInterval)
+                                    .ConfigureAwait(false);
+
                                 elapsedTime += checkInterval;
                             }
                         }
@@ -1395,7 +1667,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         /// </summary>
         ~BaseChannel()
         {
-            Dispose(false).GetAwaiter().GetResult();
+            DisposeAsync(false).GetAwaiter().GetResult();
         }
 
         #endregion

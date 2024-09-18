@@ -18,6 +18,8 @@ using WebSocketSharp.Server;
 /// </summary>
 public class Program
 {
+    #region "Options"
+
     [Verb("run", HelpText = "Run the Cryptopia Node application.")]
     public class RunOptions
     {
@@ -69,6 +71,8 @@ public class Program
 
     [Verb("exit", HelpText = "Exit the application")]
     public class ExitOptions { }
+
+    #endregion
 
     /// <summary>
     /// The application mode
