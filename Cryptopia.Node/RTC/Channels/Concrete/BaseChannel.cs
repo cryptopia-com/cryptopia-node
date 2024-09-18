@@ -1,4 +1,5 @@
-﻿using Cryptopia.Node.RTC.Channels.Config.ICE;
+﻿using Cryptopia.Node.RTC.Channels.Concrete.Audit;
+using Cryptopia.Node.RTC.Channels.Config.ICE;
 using Cryptopia.Node.RTC.Channels.Types;
 using Cryptopia.Node.RTC.Extensions;
 using Cryptopia.Node.RTC.Messages;
@@ -6,164 +7,7 @@ using Cryptopia.Node.RTC.Messages.Payloads;
 using Cryptopia.Node.RTC.Signalling;
 using Cryptopia.Node.Services.Logging;
 using SIPSorcery.Net;
-using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Timers;
-
-/// <summary>
-/// Audits sent and buffered data to ensure the connection is still alive
-/// </summary>
-public class ChannelBufferAuditor
-{
-    /// <summary>
-    /// Entity for tracking sent and buffered data
-    /// </summary>
-    public struct BufferedData
-    {
-        /// <summary>
-        /// Data size that was buffered
-        /// </summary>
-        public ulong BufferSize { get; private set; }
-
-        /// <summary>
-        /// Expect the data to be out of the buffer by this time
-        /// </summary>
-        public DateTime ExpirationTimestamp { get; private set; } 
-        
-        /// <summary>
-        /// Constructor
-        /// </summary>
-        /// <param name="bufferSize"></param>
-        /// <param name="expirationTimestamp"></param>
-        public BufferedData(ulong bufferSize, DateTime expirationTimestamp)
-        {
-            BufferSize = bufferSize;
-            ExpirationTimestamp = expirationTimestamp;
-        }
-    }
-
-    /// <summary>
-    /// Cleaning interval in milliseconds
-    /// 
-    /// The interval at which the auditor will clean the sent and buffered data
-    /// </summary>
-    public double CleaningInterval { get; private set; } = 50;
-
-    /// <summary>
-    /// The max time that data can be buffered for
-    /// </summary>
-    public double MaxBufferTime { get; private set; } = 500;
-
-    /// <summary>
-    /// Collection of sent and buffered data
-    /// </summary>
-    private ConcurrentQueue<BufferedData> _SentDataQueue = new ConcurrentQueue<BufferedData>();
-
-    /// <summary>
-    /// Used to cancel the cleaning process
-    /// </summary>
-    private CancellationTokenSource _CancellationSource = new CancellationTokenSource();
-
-    /// <summary>
-    /// Constructor
-    /// </summary>
-    public ChannelBufferAuditor()
-    { 
-        _ = Task.Run(() => CleanAsync(
-            _CancellationSource.Token));
-    }
-
-    /// <summary>
-    /// Records the sent data
-    /// </summary>
-    /// <param name="bufferSize"></param>
-    public void Record(ulong bufferSize)
-    {
-        _SentDataQueue.Enqueue(new BufferedData(
-            bufferSize,
-            DateTime.UtcNow + TimeSpan.FromMilliseconds(MaxBufferTime)));
-    }
-
-    /// <summary>
-    /// Performs an audit on the sent and buffered data
-    /// 
-    /// It checks if the actual buffer size is within the limit of the maximum buffer size that 
-    /// is allowed to be in the buffer currently
-    /// </summary>
-    /// <param name="currentBufferSize"></param>
-    /// <returns></returns>
-    public bool Audit(ulong currentBufferSize)
-    {
-        // Copy for audit
-        var sentDataQueue = new Queue<BufferedData>(_SentDataQueue);
-
-        // Check if the queue is empty
-        if (0 == sentDataQueue.Count)
-        {
-            return true;
-        }
-
-        // Check if the oldest data has expired
-        ulong maxBufferSize = 0;
-        while (sentDataQueue.Count > 0)
-        {
-            if (_SentDataQueue.TryPeek(out var oldestData))
-            {
-                if (DateTime.UtcNow > oldestData.ExpirationTimestamp)
-                {
-                    // Expired - Not allowed in buffer
-                    _SentDataQueue.TryDequeue(out _);
-                }
-
-                else
-                { 
-                    // Allowed in buffer
-                    maxBufferSize += oldestData.BufferSize;
-                }
-            }
-        }
-
-        Debug.WriteLine($"currentBufferSize: {currentBufferSize}, maxBufferSize: {maxBufferSize}");
-        Console.WriteLine($"currentBufferSize: {currentBufferSize}, maxBufferSize: {maxBufferSize}");
-
-        // Check if the current buffer size is within the limit
-        return currentBufferSize <= maxBufferSize;
-    }
-
-    /// <summary>
-    /// Performs cleanup of the sent and buffered data
-    /// </summary>
-    /// <param name="token"></param>
-    /// <returns></returns>
-    private async Task CleanAsync(CancellationToken token)
-    {
-        while (!token.IsCancellationRequested)
-        {
-            while (_SentDataQueue.Count > 0)
-            {
-                if (_SentDataQueue.TryPeek(out var oldestData))
-                {
-                    if (DateTime.UtcNow > oldestData.ExpirationTimestamp)
-                    {
-                        // Expired - Not allowed in buffer
-                        _SentDataQueue.TryDequeue(out _);
-                    }
-                }
-            }
-
-            await Task.Delay((int)CleaningInterval);
-        }
-    }
-
-    /// <summary>
-    /// Destructor
-    /// </summary>
-    ~ChannelBufferAuditor()
-    {
-        _CancellationSource.Cancel();
-    }
-}
-
 
 namespace Cryptopia.Node.RTC.Channels.Concrete
 {
@@ -376,8 +220,10 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
         // Auditor
         private readonly object _AuditLock = new object();
-        private System.Timers.Timer? _AuditTimer;
+        private Task<bool>? _AuditTask;
+        private CancellationTokenSource? _AuditTokenSource;
         private ChannelBufferAuditor? _CommandChannelAuditor;
+        private ChannelBufferAuditor? _DataChannelAuditor;
 
         // Constants
         private const string DATA_CHANNEL_LABEL = "data";
@@ -582,7 +428,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
             lock (_AuditLock)
             {
-                if (null != _AuditTimer)
+                if (null != _AuditTokenSource)
                 {
                     var exception = new InvalidOperationException("Auditor already started");
                     LoggingService?.LogException(exception, GatherChannelData());
@@ -590,23 +436,15 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 }
 
                 // Start auditor 
+                _AuditTokenSource = new CancellationTokenSource();
                 _CommandChannelAuditor = new ChannelBufferAuditor();
-                //_AuditTimer = new System.Timers.Timer(AuditInterval);
-                //_AuditTimer.Elapsed += OnAuditTimerElapsed;
-                //_AuditTimer.Start();
+                _DataChannelAuditor = new ChannelBufferAuditor();
             }
+
+            _ = Task.Run(() => RunAuditorAsync(
+                _AuditTokenSource.Token));
 
             return (T)this;
-        }
-
-        private CancellationTokenSource _AuditorCancellationTokenSource = new CancellationTokenSource();
-
-        private async Task RunAuditor()
-        {
-            while (!_AuditorCancellationTokenSource.IsCancellationRequested)
-            { 
-                // ToDo: Try in loop with delay
-            }
         }
 
         /// <summary>
@@ -616,16 +454,197 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         {
             lock (_AuditLock)
             {
-                if (null != _AuditTimer)
+                _AuditTokenSource?.Cancel();
+                _AuditTokenSource = null;
+                _CommandChannelAuditor = null;
+                _DataChannelAuditor = null;
+            }
+        }
+
+        /// <summary>
+        /// Runs the auditor loop
+        /// </summary>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        private async Task RunAuditorAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var auditResult = await 
+                     PerformAuditAsync()
+                    .ConfigureAwait(false);
+
+                if (!auditResult)
                 {
-                    _AuditTimer.Stop();
-                    _AuditTimer.Elapsed -= OnAuditTimerElapsed;
-                    _AuditTimer.Dispose();
-                    _AuditTimer = null;
+                    StopAuditor(); 
                 }
 
-                _CommandChannelAuditor = null;
+                await Task
+                    .Delay((int)AuditInterval)
+                    .ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// Performs an audit on the channel
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private Task<bool> PerformAuditAsync()
+        {
+            Task<bool> task = null;
+            lock (_AuditLock)
+            {
+                if (null != _AuditTask && !_AuditTask.IsCompleted)
+                {
+                    task = _AuditTask;
+                }
+            }
+
+            if (null == task)
+            {
+                task = DoPerformAuditAsync();
+                lock (_AuditLock)
+                {
+                    _AuditTask = task;
+                }
+            }
+
+            return task;
+        }
+
+        /// <summary>
+        /// Performs an audit on the channel
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private async Task<bool> DoPerformAuditAsync()
+        {
+            bool shouldClose = false;
+            bool shouldDispose = false;
+
+            RTCDataChannel? commandChannel = null;
+            RTCDataChannel? dataChannel = null;
+            ChannelBufferAuditor? commandChannelAuditor = null;
+            ChannelBufferAuditor? dataChannelAuditor = null;
+            ChannelState state;
+
+            lock (_ChannelLock) 
+            {
+                if (IsDisposedOrDisposing())
+                {
+                    return false;
+                }
+
+                // Capture state
+                commandChannel = _CommandChannel;
+                commandChannelAuditor = _CommandChannelAuditor;
+                dataChannel = _DataChannel;
+                dataChannelAuditor = _DataChannelAuditor;
+                state = _State;
+            }
+
+            // Audit command channel state
+            if (state != ChannelState.Disposing && state != ChannelState.Disposed &&
+               (null == commandChannel || commandChannel.readyState != RTCDataChannelState.open))
+            {
+                shouldDispose = true;
+
+                // Log failed audit
+                var data = GatherChannelData();
+                data.Add("readyState", null == commandChannel 
+                    ? "null" : commandChannel.readyState.ToString());
+                LoggingService?.LogWarning("State Audit Failed: Command channel", data);
+            }
+
+            // Audit data channel state
+            else if (state == ChannelState.Open &&
+                (null == dataChannel || dataChannel.readyState != RTCDataChannelState.open))
+            {
+                shouldClose = true;
+
+                // Log failed audit
+                var data = GatherChannelData();
+                data.Add("readyState", null == dataChannel
+                    ? "null" : dataChannel.readyState.ToString());
+                LoggingService?.LogWarning("State Audit Failed: Data channel", data);
+            }
+
+            // Audit command channel buffer
+            else if (null != commandChannel && null != commandChannelAuditor)
+            {
+                try
+                {
+                    // Audit buffered data
+                    var bufferedAmount = commandChannel.bufferedAmount;
+                    shouldDispose = !commandChannelAuditor.Audit(bufferedAmount);
+
+                    // Log failed audit
+                    if (shouldDispose)
+                    {
+                        var data = GatherChannelData();
+                        data.Add("", commandChannelAuditor.MaxBufferTime.ToString());
+                        data.Add("bufferedAmount", bufferedAmount.ToString());
+                        LoggingService?.LogWarning("Buffer Audit Failed: Command channel", data);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    shouldDispose = true;
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+            }
+
+            // Audit data channel buffer
+            else if (null != dataChannel && null != dataChannelAuditor)
+            {
+                try
+                {
+                    // Audit buffered data
+                    var bufferedAmount = dataChannel.bufferedAmount;
+                    shouldClose = !dataChannelAuditor.Audit(bufferedAmount);
+
+                    // Log failed audit
+                    if (shouldClose)
+                    {
+                        var data = GatherChannelData();
+                        data.Add("", dataChannelAuditor.MaxBufferTime.ToString());
+                        data.Add("bufferedAmount", bufferedAmount.ToString());
+                        LoggingService?.LogWarning("Buffer Audit Failed: Data channel", data);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    shouldClose = true;
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+            }
+
+            // Should have been disposed so dispose
+            if (shouldDispose)
+            {
+                await DisposeAsync(true)
+                     .ConfigureAwait(false);
+            }
+
+            // Should have been closed so close
+            else if (shouldClose)
+            {
+                try
+                {
+                    await CloseAsync(false)
+                         .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LoggingService?.LogException(
+                        ex, GatherChannelData());
+                }
+            }
+
+            return !shouldDispose && !shouldClose;
         }
 
         /// <summary>
@@ -672,7 +691,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                 var timeout = DateTime.Now + TimeSpan.FromMilliseconds(SignallingTimeout * 0.5f);
                 while (!SignallingService.IsOpen && DateTime.Now < timeout)
                 {
-                    await Task.Delay(100);
+                    await Task
+                        .Delay(100)
+                        .ConfigureAwait(false);
                 }
 
                 if (!SignallingService.IsOpen)
@@ -688,7 +709,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                         if (_State != ChannelState.Connecting)
                         {
-                            var exception = new InvalidOperationException($"Expected {ChannelState.Connecting} state instead of {_State} state");
+                            var exception = new InvalidOperationException(
+                                $"Expected {ChannelState.Connecting} state instead of {_State} state");
                             LoggingService?.LogException(exception, GatherChannelData());
                             throw exception;
                         }
@@ -773,7 +795,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                         // Wait 
                         while (State != ChannelState.Connecting && State != ChannelState.Signalling)
                         {
-                            await Task.Delay(100);
+                            await Task
+                                .Delay(100)
+                                .ConfigureAwait(false);
                         }
 
                         return;
@@ -804,7 +828,9 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
                     // Wait 
                     while (State == ChannelState.Connecting || State == ChannelState.Signalling)
                     {
-                        await Task.Delay(100);
+                        await Task
+                            .Delay(100)
+                            .ConfigureAwait(false);
                     }
 
                     return;
@@ -846,7 +872,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             }
 
             // Create and send offer
-            await OfferAsync();
+            await OfferAsync()
+                 .ConfigureAwait(false);
         }
 
         /// <summary>
@@ -939,7 +966,8 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
             StartSignallingTimer();
 
             // Connect to signalling server
-            await ConnectAsync();
+            await ConnectAsync()
+                 .ConfigureAwait(false);
 
             // Indicate signalling started
             bool shouldNotifyChange;
@@ -1091,7 +1119,7 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                     while (commandChannel.bufferedAmount > 0 && elapsedTime < maxWaitTime)
                     {
-                        await Task.Delay(checkInterval); // TODO: From settings
+                        await Task.Delay(checkInterval).ConfigureAwait(false); // TODO: From settings
                         elapsedTime += checkInterval;
                     }
                 }
@@ -1591,7 +1619,10 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
 
                             while (commandChannel.bufferedAmount > 0 && elapsedTime < maxWaitTime)
                             {
-                                await Task.Delay(checkInterval);
+                                await Task
+                                    .Delay(checkInterval)
+                                    .ConfigureAwait(false);
+
                                 elapsedTime += checkInterval;
                             }
                         }
@@ -1991,84 +2022,6 @@ namespace Cryptopia.Node.RTC.Channels.Concrete
         protected virtual void OnHighLatencyDetected(double latency)
         {
             OnHighLatency?.Invoke(this, latency);
-        }
-
-        /// <summary>
-        /// Called when the audit timer elapses
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void OnAuditTimerElapsed(object? sender, ElapsedEventArgs e)
-        {
-            bool shouldDispose = false;
-            bool shouldClose = false;
-
-            lock (_ChannelLock)
-            {
-
-                // TODO
-                // 1. channel state incorrect after closure by other party, indicates open but isn't open. Perform try catch test instead.
-                // 2. Implement PerformAudit() function and call from audit timer elapse as well as before Send(..) is called
-
-                if (_State != ChannelState.Disposing && _State != ChannelState.Disposed &&
-                    (null == _CommandChannel || _CommandChannel.readyState != RTCDataChannelState.open))
-                {
-                    shouldDispose = true;
-                }
-
-                else if (_State == ChannelState.Open &&
-                    (null == _DataChannel || _DataChannel.readyState != RTCDataChannelState.open))
-                {
-                    shouldClose = true;
-                }
-
-                else if (null != _CommandChannel && null != _CommandChannelAuditor)
-                {
-                    try
-                    {
-                        shouldDispose = !_CommandChannelAuditor.Audit(
-                            _CommandChannel.bufferedAmount);
-                    }
-                    catch (Exception)
-                    {
-                        shouldDispose = true;
-                    }
-                }
-            }
-
-            // Should have been disposed
-            if (shouldDispose)
-            {
-                Dispose();
-            }
-
-            // Should have been closed
-            else if (shouldClose)
-            {
-                lock (_AuditLock)
-                {
-                    // Stop the timer to prevent re-entry
-                    _AuditTimer?.Stop();
-                }
-
-                try
-                {
-                    _ = Task.Run(() => CloseAsync(false));
-                }
-                catch (Exception ex)
-                {
-                    LoggingService?.LogException(
-                        ex, GatherChannelData());
-                }
-                finally
-                {
-                    // Restart the timer
-                    lock (_AuditLock)
-                    {
-                        _AuditTimer?.Start();
-                    }
-                }
-            }
         }
 
         #endregion
